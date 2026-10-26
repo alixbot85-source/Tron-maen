@@ -57,3 +57,10 @@ REFERRAL_FIXED_REWARD = Decimal("0.5")
 
 # سهم دعوت‌کننده از هر برداشت ماین دعوت‌شده؛ 0.10 یعنی 10 درصد.
 REFERRAL_MINING_PERCENTAGE = Decimal("0.10")
+
+# آدرس عمومی HTTPS وب‌اپ تلگرام در ریشهٔ دامنه. ادمین می‌تواند آن را از پنل تغییر دهد.
+WEB_APP_URL = os.getenv("WEB_APP_URL", "").strip().rstrip("/")
+
+# میزبان و پورت سرویس وب‌اپ محلی؛ معمولاً پشت reverse proxy با HTTPS قرار می‌گیرد.
+WEB_APP_HOST = os.getenv("WEB_APP_HOST", "0.0.0.0").strip() or "0.0.0.0"
+WEB_APP_PORT = int(os.getenv("WEB_APP_PORT", "8080"))

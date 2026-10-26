@@ -889,6 +889,47 @@ class Database:
             finally:
                 connection.close()
 
+    def get_all_settings(self) -> dict[str, str]:
+        """تمام تنظیمات ذخیره‌شده را با یک خواندن برای تنظیمات اجرایی برمی‌گرداند."""
+        with self._lock:
+            connection = self._connect()
+            try:
+                rows = connection.execute("SELECT key, value FROM settings").fetchall()
+                return {str(row["key"]): str(row["value"]) for row in rows}
+            finally:
+                connection.close()
+
+    def set_admin_setting(
+        self,
+        admin_id: int,
+        key: str,
+        value: str,
+        action: str,
+        reason: str,
+        now: Optional[int] = None,
+    ) -> None:
+        """یک تنظیم اجرایی را ذخیره و تغییر آن را در لاگ ادمین ثبت می‌کند."""
+        if not key or not value:
+            raise ValueError("کلید و مقدار تنظیم لازم هستند.")
+        current_time = int(time.time()) if now is None else int(now)
+        with self._transaction() as connection:
+            connection.execute(
+                """
+                INSERT INTO settings (key, value) VALUES (?, ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                """,
+                (key, value),
+            )
+            self._add_admin_log(
+                connection,
+                admin_id=admin_id,
+                target_user_id=None,
+                action=action,
+                amount=None,
+                reason=reason,
+                now=current_time,
+            )
+
     def set_wallet_address(
         self,
         admin_id: int,

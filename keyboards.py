@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from decimal import Decimal, ROUND_HALF_UP, localcontext
-from typing import Iterable
+from typing import Iterable, Mapping
 
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 
 from config import MINING_CAP_OPTIONS, SPEED_PACKAGES
 
@@ -26,7 +26,7 @@ def _short_amount(value: Decimal | int | str) -> str:
     return text or "0"
 
 
-def main_menu(is_admin: bool = False) -> InlineKeyboardMarkup:
+def main_menu(is_admin: bool = False, web_app_url: str = "") -> InlineKeyboardMarkup:
     """منوی اصلی کاربر؛ همهٔ مسیرهای اصلی در چهار ردیف کوتاه قرار دارند."""
     rows = [
         [
@@ -46,6 +46,8 @@ def main_menu(is_admin: bool = False) -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="👤 حساب من", callback_data="menu:account"),
         ],
     ]
+    if web_app_url:
+        rows.append([InlineKeyboardButton(text="🌐 وب‌اپ", web_app=WebAppInfo(url=web_app_url))])
     if is_admin:
         rows.append([InlineKeyboardButton(text="🛠 پنل مدیریت", callback_data="admin:home")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -101,14 +103,17 @@ def mining_cap_keyboard(current_cap: Decimal | int | str) -> InlineKeyboardMarku
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-def speed_packages_keyboard() -> InlineKeyboardMarkup:
-    """چهار پکیج سرعت را به‌صورت دو‌تایی و قابل‌خواندن روی موبایل نمایش می‌دهد."""
+def speed_packages_keyboard(
+    packages: Mapping[int, Decimal] | None = None,
+) -> InlineKeyboardMarkup:
+    """پکیج‌های سرعت را به‌صورت دو‌تایی و قابل‌خواندن روی موبایل نمایش می‌دهد."""
+    active_packages = packages or SPEED_PACKAGES
     package_buttons = [
         InlineKeyboardButton(
             text=f"×{multiplier} | {_short_amount(price)} TRON",
             callback_data=f"speed:{multiplier}",
         )
-        for multiplier, price in sorted(SPEED_PACKAGES.items())
+        for multiplier, price in sorted(active_packages.items())
     ]
     rows = [package_buttons[index : index + 2] for index in range(0, len(package_buttons), 2)]
     rows.append([InlineKeyboardButton(text=BACK_TO_MAIN, callback_data="menu:main")])
@@ -149,8 +154,69 @@ def admin_panel_keyboard() -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="⚡ سرعت", callback_data="admin:speed"),
                 InlineKeyboardButton(text="🏷 آدرس TRON", callback_data="admin:wallet"),
             ],
-            [InlineKeyboardButton(text="📊 آمار", callback_data="admin:stats")],
+            [
+                InlineKeyboardButton(text="⚙️ تنظیمات", callback_data="admin:settings"),
+                InlineKeyboardButton(text="📊 آمار", callback_data="admin:stats"),
+            ],
             [InlineKeyboardButton(text=BACK_TO_MAIN, callback_data="menu:main")],
+        ]
+    )
+
+
+def admin_settings_keyboard() -> InlineKeyboardMarkup:
+    """تنظیمات عملیاتی قابل تغییر بدون دست‌زدن به فایل config.py."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="📈 نرخ ماین", callback_data="admin_setting:base_rate"),
+                InlineKeyboardButton(text="⏱ فاصله ماین", callback_data="admin_setting:cooldown"),
+            ],
+            [
+                InlineKeyboardButton(text="🎁 پاداش ثابت", callback_data="admin_setting:ref_fixed"),
+                InlineKeyboardButton(text="٪ پاداش معرفی", callback_data="admin_setting:ref_percent"),
+            ],
+            [InlineKeyboardButton(text="⚡ قیمت پکیج‌ها", callback_data="admin_setting:packages")],
+            [
+                InlineKeyboardButton(text="🌐 آدرس وب‌اپ", callback_data="admin_setting:webapp"),
+                InlineKeyboardButton(text="🏷 آدرس پرداخت", callback_data="admin:wallet"),
+            ],
+            [InlineKeyboardButton(text=BACK_TO_ADMIN, callback_data="admin:home")],
+        ]
+    )
+
+
+def admin_settings_back_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text="🔙 تنظیمات", callback_data="admin:settings")]]
+    )
+
+
+def admin_speed_package_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="×2", callback_data="admin_package:2"),
+                InlineKeyboardButton(text="×3", callback_data="admin_package:3"),
+            ],
+            [
+                InlineKeyboardButton(text="×4", callback_data="admin_package:4"),
+                InlineKeyboardButton(text="×5", callback_data="admin_package:5"),
+            ],
+            [InlineKeyboardButton(text=BACK_TO_ADMIN, callback_data="admin:settings")],
+        ]
+    )
+
+
+def admin_setting_confirmation_keyboard(setting_name: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✅ ذخیره تنظیم",
+                    callback_data=f"admin_setting_confirm:{setting_name}",
+                )
+            ],
+            [InlineKeyboardButton(text="↩️ لغو", callback_data="admin:settings")],
         ]
     )
 

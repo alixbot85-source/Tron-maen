@@ -16,7 +16,14 @@ from aiogram.filters import Command, CommandStart, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import CallbackQuery, Message, ReplyKeyboardRemove
+from aiogram.types import (
+    CallbackQuery,
+    MenuButtonDefault,
+    MenuButtonWebApp,
+    Message,
+    ReplyKeyboardRemove,
+    WebAppInfo,
+)
 
 from config import (
     ADMIN_IDS,
@@ -30,14 +37,31 @@ from config import (
     REFERRAL_FIXED_REWARD,
     REFERRAL_MINING_PERCENTAGE,
     SPEED_PACKAGES,
-    TRON_WALLET_ADDRESS,
+    WEB_APP_HOST,
+    WEB_APP_PORT,
 )
 from database import Database, Payment, User, Withdrawal
+from webapp_server import start_web_app_server
+from runtime_settings import (
+    SETTING_BASE_RATE,
+    SETTING_MINING_COOLDOWN,
+    SETTING_REFERRAL_FIXED_REWARD,
+    SETTING_REFERRAL_PERCENTAGE,
+    SETTING_WEB_APP_URL,
+    RuntimeSettings,
+    normalize_web_app_url,
+    speed_package_setting_key,
+    valid_web_app_url,
+)
 from keyboards import (
     account_keyboard,
     admin_balance_mode_keyboard,
     admin_change_confirmation_keyboard,
     admin_panel_keyboard,
+    admin_setting_confirmation_keyboard,
+    admin_settings_keyboard,
+    admin_settings_back_keyboard,
+    admin_speed_package_keyboard,
     back_to_main_keyboard,
     balance_keyboard,
     cancel_keyboard,
@@ -62,6 +86,7 @@ logger = logging.getLogger(__name__)
 
 router = Router()
 db = Database(DATABASE_PATH)
+runtime_settings = RuntimeSettings(db)
 runtime_bot_username = BOT_USERNAME
 
 # این اعداد فقط برای خوانایی صفحه‌ها و جلوگیری از ورودی بسیار بزرگ هستند؛
@@ -81,6 +106,15 @@ NUMBER_TRANSLATION = str.maketrans(
     PERSIAN_DIGITS + ARABIC_DIGITS + "٫٬",
     ASCII_DIGITS + ASCII_DIGITS + ".,",
 )
+
+# شناسه، متن راهنما و نوع اعتبارسنجی تنظیماتی که ادمین می‌تواند تغییر دهد.
+RUNTIME_SETTING_DEFINITIONS = {
+    "base_rate": (SETTING_BASE_RATE, "📈 نرخ ماین", "نرخ جدید را به TRON در دقیقه ارسال کنید.", "positive_decimal"),
+    "cooldown": (SETTING_MINING_COOLDOWN, "⏱ فاصله ماین", "فاصله جدید را به ثانیه ارسال کنید.", "positive_integer"),
+    "ref_fixed": (SETTING_REFERRAL_FIXED_REWARD, "🎁 پاداش ثابت", "مبلغ پاداش را به TRON ارسال کنید.", "nonnegative_decimal"),
+    "ref_percent": (SETTING_REFERRAL_PERCENTAGE, "٪ پاداش معرفی", "درصد را مانند 10 ارسال کنید.", "percentage"),
+    "webapp": (SETTING_WEB_APP_URL, "🌐 آدرس وب‌اپ", "آدرس عمومی HTTPS در ریشهٔ دامنه را ارسال کنید.", "webapp_url"),
+}
 
 
 class PaymentState(StatesGroup):
@@ -120,6 +154,11 @@ class AdminWalletState(StatesGroup):
     waiting_confirmation = State()
 
 
+class AdminRuntimeSettingState(StatesGroup):
+    waiting_value = State()
+    waiting_confirmation = State()
+
+
 def is_admin(user_id: Optional[int]) -> bool:
     return user_id is not None and user_id in ADMIN_IDS
 
@@ -147,6 +186,23 @@ def parse_positive_decimal(value: Optional[str]) -> Optional[Decimal]:
     except (InvalidOperation, ValueError):
         return None
     if not number.is_finite() or number <= Decimal("0"):
+        return None
+    return number
+
+
+def parse_nonnegative_decimal(value: Optional[str]) -> Optional[Decimal]:
+    if value is None:
+        return None
+    normalized = normalize_number_text(value)
+    if not normalized or len(normalized) > MAX_NUMERIC_INPUT_LENGTH:
+        return None
+    if not re.fullmatch(r"\d+(?:\.\d+)?", normalized):
+        return None
+    try:
+        number = Decimal(normalized)
+    except (InvalidOperation, ValueError):
+        return None
+    if not number.is_finite() or number < Decimal("0"):
         return None
     return number
 
@@ -236,10 +292,31 @@ def package_multiplier(package: str) -> Optional[Decimal]:
     return multiplier
 
 
+def get_runtime_config():
+    """تنظیمات جاری را از دیتابیس با fallback امن به config می‌خواند."""
+    return runtime_settings.snapshot()
+
+
+def user_main_keyboard(user_id: int):
+    settings = get_runtime_config()
+    return main_menu(is_admin(user_id), web_app_url=settings.web_app_url)
+
+
 def get_wallet_address() -> str:
-    """آدرس ذخیره‌شده توسط ادمین را با اولویت نسبت به config برمی‌گرداند."""
-    saved_address = db.get_setting("tron_wallet_address")
-    return (saved_address or TRON_WALLET_ADDRESS).strip()
+    return get_runtime_config().tron_wallet_address
+
+
+async def apply_web_app_menu_button(bot: Bot, web_app_url: str) -> None:
+    """دکمهٔ منوی اصلی تلگرام را با آدرس وب‌اپ هماهنگ می‌کند."""
+    if web_app_url:
+        await bot.set_chat_menu_button(
+            menu_button=MenuButtonWebApp(
+                text="وب‌اپ",
+                web_app=WebAppInfo(url=web_app_url),
+            )
+        )
+    else:
+        await bot.set_chat_menu_button(menu_button=MenuButtonDefault())
 
 
 PANEL_DIVIDER = "────────────"
@@ -250,22 +327,24 @@ def panel(title: str, lines: list[str]) -> str:
     return "\n".join([title, PANEL_DIVIDER, *lines])
 
 
-def cooldown_remaining(user: User) -> int:
+def cooldown_remaining(user: User, cooldown_seconds: Optional[int] = None) -> int:
     elapsed = max(0, int(time.time()) - user.last_mining_time)
-    return max(0, MINING_COOLDOWN_SECONDS - elapsed)
+    cooldown = cooldown_seconds if cooldown_seconds is not None else get_runtime_config().mining_cooldown_seconds
+    return max(0, cooldown - elapsed)
 
 
 def main_menu_text(user: User) -> str:
+    settings = get_runtime_config()
     if user.total_mined >= user.mining_cap:
         status = "برداشت وجه: آماده"
     else:
-        remaining = cooldown_remaining(user)
+        remaining = cooldown_remaining(user, settings.mining_cooldown_seconds)
         status = "برداشت ماین: آماده" if remaining == 0 else f"برداشت بعدی: {format_remaining(remaining)}"
     return panel(
         "🔺 TRON",
         [
             "شبیه‌ساز ماینینگ TRON",
-            f"نرخ پایه: {format_tron(BASE_MINING_RATE)} / دقیقه",
+            f"نرخ پایه: {format_tron(settings.base_mining_rate)} / دقیقه",
             f"سرعت: {format_multiplier(user.speed_multiplier)}",
             status,
         ],
@@ -273,12 +352,13 @@ def main_menu_text(user: User) -> str:
 
 
 def account_text(user: User, withdrawal_pending: bool) -> str:
+    settings = get_runtime_config()
     if withdrawal_pending:
         mining_status = "وضعیت برداشت: در انتظار بررسی"
     elif user.total_mined >= user.mining_cap:
         mining_status = "وضعیت برداشت: آماده ثبت"
     else:
-        remaining = cooldown_remaining(user)
+        remaining = cooldown_remaining(user, settings.mining_cooldown_seconds)
         mining_status = "برداشت ماین: آماده" if remaining == 0 else f"برداشت بعدی: {format_remaining(remaining)}"
     return panel(
         "👤 حساب من",
@@ -305,11 +385,12 @@ def balance_text(user: User) -> str:
 
 
 def help_text() -> str:
+    settings = get_runtime_config()
     return panel(
         "📊 راهنما",
         [
             "این ربات یک شبیه‌ساز ماینینگ TRON است.",
-            "ماین را هر ۶۰ ثانیه دریافت کنید.",
+            f"ماین را هر {settings.mining_cooldown_seconds} ثانیه دریافت کنید.",
             "پس از رسیدن به سقف، برداشت وجه را ثبت کنید.",
             "پرداخت سرعت و برداشت توسط ادمین بررسی می‌شود.",
         ],
@@ -335,6 +416,27 @@ def user_details_text(user: User) -> str:
 
 def admin_panel_text() -> str:
     return panel("🛠 پنل مدیریت", ["یک بخش را انتخاب کنید."])
+
+
+def admin_settings_text() -> str:
+    settings = get_runtime_config()
+    web_app_status = settings.web_app_url or "تنظیم نشده"
+    package_summary = " | ".join(
+        f"×{multiplier}: {format_tron(price)}"
+        for multiplier, price in sorted(settings.speed_packages.items())
+    )
+    return panel(
+        "⚙️ تنظیمات ربات",
+        [
+            f"نرخ ماین: {format_tron(settings.base_mining_rate)} / دقیقه",
+            f"فاصله ماین: {settings.mining_cooldown_seconds} ثانیه",
+            f"پاداش ثابت: {format_tron(settings.referral_fixed_reward)}",
+            f"پاداش معرفی: {format_number(settings.referral_mining_percentage * Decimal('100'))}٪",
+            f"پکیج‌ها: {package_summary}",
+            f"آدرس پرداخت: {one_line(settings.tron_wallet_address or 'تنظیم نشده', 48)}",
+            f"وب‌اپ: {one_line(web_app_status, 70)}",
+        ],
+    )
 
 
 def users_page_text(users: list[User], total: int, offset: int) -> str:
@@ -474,7 +576,7 @@ async def show_main_menu_callback(callback: CallbackQuery, user: User) -> None:
     await edit_callback_message(
         callback,
         main_menu_text(user),
-        main_menu(is_admin(user.user_id)),
+        user_main_keyboard(user.user_id),
     )
 
 
@@ -537,12 +639,13 @@ async def start_handler(message: Message, state: FSMContext) -> None:
     await state.clear()
     parts = (message.text or "").split(maxsplit=1)
     payload = parts[1].strip() if len(parts) > 1 else ""
+    settings = get_runtime_config()
     result = db.register_user(
         user_id=message.from_user.id,
         username=message.from_user.username,
         first_name=message.from_user.first_name,
         referrer_candidate=extract_referrer(payload),
-        fixed_referral_reward=REFERRAL_FIXED_REWARD,
+        fixed_referral_reward=settings.referral_fixed_reward,
         default_mining_cap=DEFAULT_MINING_CAP,
     )
 
@@ -552,7 +655,7 @@ async def start_handler(message: Message, state: FSMContext) -> None:
     await message.answer(panel("🔺 TRON", welcome_lines), reply_markup=ReplyKeyboardRemove())
     await message.answer(
         main_menu_text(result.user),
-        reply_markup=main_menu(is_admin(message.from_user.id)),
+        reply_markup=user_main_keyboard(message.from_user.id),
     )
 
 
@@ -564,7 +667,7 @@ async def cancel_command_handler(message: Message, state: FSMContext) -> None:
     if user:
         await message.answer(
             panel("🔺 TRON", ["عملیات لغو شد.", "از منوی زیر انتخاب کنید."]),
-            reply_markup=main_menu(is_admin(user.user_id)),
+            reply_markup=user_main_keyboard(user.user_id),
         )
     elif is_admin(user_id):
         await message.answer(admin_panel_text(), reply_markup=admin_panel_keyboard())
@@ -582,7 +685,7 @@ async def cancel_callback_handler(callback: CallbackQuery, state: FSMContext) ->
         await edit_callback_message(
             callback,
             panel("🔺 TRON", ["عملیات لغو شد.", "از منوی زیر انتخاب کنید."]),
-            main_menu(is_admin(user.user_id)),
+            user_main_keyboard(user.user_id),
         )
     elif is_admin(user_id):
         await edit_callback_message(callback, admin_panel_text(), admin_panel_keyboard())
@@ -658,11 +761,12 @@ async def mine_callback_handler(callback: CallbackQuery) -> None:
     user = await ensure_registered_callback(callback)
     if not user:
         return
+    settings = get_runtime_config()
     result = db.claim_mining(
         user_id=user.user_id,
-        base_rate_per_minute=BASE_MINING_RATE,
-        cooldown_seconds=MINING_COOLDOWN_SECONDS,
-        referral_percentage=REFERRAL_MINING_PERCENTAGE,
+        base_rate_per_minute=settings.base_mining_rate,
+        cooldown_seconds=settings.mining_cooldown_seconds,
+        referral_percentage=settings.referral_mining_percentage,
     )
     if result.status == "claimed":
         remaining_to_cap = max(Decimal("0"), result.mining_cap - result.total_mined)
@@ -776,8 +880,9 @@ async def referral_callback_handler(callback: CallbackQuery, bot: Bot) -> None:
         )
         return
 
+    settings = get_runtime_config()
     invite_link = f"https://t.me/{runtime_bot_username}?start=REF_{user.user_id}"
-    referral_percent = format_number(REFERRAL_MINING_PERCENTAGE * Decimal("100"))
+    referral_percent = format_number(settings.referral_mining_percentage * Decimal("100"))
     successful_referrals = db.count_referrals(user.user_id)
     await callback.answer()
     await edit_callback_message(
@@ -788,7 +893,7 @@ async def referral_callback_handler(callback: CallbackQuery, bot: Bot) -> None:
                 "لینک اختصاصی:",
                 invite_link,
                 f"دعوت موفق: {successful_referrals}",
-                f"پاداش ثبت‌نام: {format_tron(REFERRAL_FIXED_REWARD)}",
+                f"پاداش ثبت‌نام: {format_tron(settings.referral_fixed_reward)}",
                 f"پاداش ماین: {referral_percent}٪",
             ],
         ),
@@ -810,9 +915,10 @@ async def speed_menu_callback_handler(callback: CallbackQuery) -> None:
             back_to_main_keyboard(),
         )
         return
+    settings = get_runtime_config()
     package_lines = [
         f"سرعت {format_multiplier(multiplier)} — {format_tron(price)}"
-        for multiplier, price in sorted(SPEED_PACKAGES.items())
+        for multiplier, price in sorted(settings.speed_packages.items())
     ]
     await callback.answer()
     await edit_callback_message(
@@ -821,7 +927,7 @@ async def speed_menu_callback_handler(callback: CallbackQuery) -> None:
             "⚡ ارتقای سرعت",
             [f"سرعت فعلی: {format_multiplier(user.speed_multiplier)}", *package_lines, "یک پکیج انتخاب کنید."],
         ),
-        speed_packages_keyboard(),
+        speed_packages_keyboard(settings.speed_packages),
     )
 
 
@@ -836,11 +942,12 @@ async def speed_package_callback_handler(callback: CallbackQuery, state: FSMCont
     except ValueError:
         await callback.answer("پکیج انتخاب‌شده معتبر نیست.", show_alert=True)
         return
-    price = SPEED_PACKAGES.get(multiplier)
+    settings = get_runtime_config()
+    price = settings.speed_packages.get(multiplier)
     if price is None:
         await callback.answer("این پکیج در دسترس نیست.", show_alert=True)
         return
-    wallet_address = get_wallet_address()
+    wallet_address = settings.tron_wallet_address
     if not valid_tron_address(wallet_address):
         await callback.answer("آدرس پرداخت تنظیم نشده است.", show_alert=True)
         return
@@ -886,7 +993,7 @@ async def payment_txid_handler(message: Message, state: FSMContext) -> None:
         if user:
             await message.answer(
                 panel("⚡ ارتقای سرعت", ["اطلاعات پکیج پیدا نشد.", "دوباره از منوی اصلی شروع کنید."]),
-                reply_markup=main_menu(is_admin(user.user_id)),
+                reply_markup=user_main_keyboard(user.user_id),
             )
         else:
             await message.answer("حساب شما پیدا نشد. لطفاً دوباره /start را بفرستید.")
@@ -917,7 +1024,7 @@ async def payment_txid_handler(message: Message, state: FSMContext) -> None:
                     "وضعیت: در انتظار بررسی ادمین",
                 ],
             ),
-            reply_markup=main_menu(is_admin(user.user_id)),
+            reply_markup=user_main_keyboard(user.user_id),
         )
     else:
         await message.answer("حساب شما پیدا نشد. لطفاً دوباره /start را بفرستید.")
@@ -999,7 +1106,7 @@ async def withdrawal_address_handler(message: Message, state: FSMContext) -> Non
                         "وضعیت: در انتظار بررسی ادمین",
                     ],
                 ),
-                reply_markup=main_menu(is_admin(user.user_id)),
+                reply_markup=user_main_keyboard(user.user_id),
             )
         return
 
@@ -1013,7 +1120,7 @@ async def withdrawal_address_handler(message: Message, state: FSMContext) -> Non
     user = db.get_user(user_id)
     await message.answer(
         panel("📤 برداشت وجه", messages.get(result.status, ["ثبت درخواست ممکن نشد."])),
-        reply_markup=main_menu(is_admin(user_id)) if user else None,
+        reply_markup=user_main_keyboard(user_id) if user else None,
     )
 
 @router.callback_query(F.data == "admin:home")
@@ -1593,6 +1700,217 @@ async def admin_withdrawal_review_callback_handler(callback: CallbackQuery, bot:
         await callback.answer("درخواست رد شد.")
     await show_withdrawals_page(callback, 0)
 
+@router.callback_query(F.data == "admin:settings")
+async def admin_settings_callback_handler(callback: CallbackQuery, state: FSMContext) -> None:
+    if not await ensure_admin_callback(callback):
+        return
+    await state.clear()
+    await callback.answer()
+    await edit_callback_message(callback, admin_settings_text(), admin_settings_keyboard())
+
+
+@router.callback_query(F.data.startswith("admin_setting:"))
+async def admin_setting_choice_handler(callback: CallbackQuery, state: FSMContext) -> None:
+    if not await ensure_admin_callback(callback):
+        return
+    setting_name = (callback.data or "").split(":", maxsplit=1)[1]
+    if setting_name == "packages":
+        settings = get_runtime_config()
+        lines = [
+            f"سرعت {format_multiplier(multiplier)}: {format_tron(price)}"
+            for multiplier, price in sorted(settings.speed_packages.items())
+        ]
+        await state.clear()
+        await callback.answer()
+        await edit_callback_message(
+            callback,
+            panel("⚡ قیمت پکیج‌ها", [*lines, "یک ضریب را انتخاب کنید."]),
+            admin_speed_package_keyboard(),
+        )
+        return
+
+    definition = RUNTIME_SETTING_DEFINITIONS.get(setting_name)
+    if not definition:
+        await callback.answer("تنظیم انتخاب‌شده معتبر نیست.", show_alert=True)
+        return
+    setting_key, title, prompt, value_kind = definition
+    settings = get_runtime_config()
+    current_values = {
+        "base_rate": format_tron(settings.base_mining_rate),
+        "cooldown": f"{settings.mining_cooldown_seconds} ثانیه",
+        "ref_fixed": format_tron(settings.referral_fixed_reward),
+        "ref_percent": f"{format_number(settings.referral_mining_percentage * Decimal('100'))}٪",
+        "webapp": settings.web_app_url or "تنظیم نشده",
+    }
+    await state.clear()
+    await state.update_data(
+        setting_name=setting_name,
+        setting_key=setting_key,
+        setting_title=title,
+        setting_prompt=prompt,
+        setting_kind=value_kind,
+        setting_action=f"setting_{setting_name}_changed",
+    )
+    await state.set_state(AdminRuntimeSettingState.waiting_value)
+    await callback.answer()
+    await edit_callback_message(
+        callback,
+        panel(title, [f"مقدار فعلی: {one_line(current_values[setting_name], 80)}", prompt]),
+        admin_settings_back_keyboard(),
+    )
+
+
+@router.callback_query(F.data.startswith("admin_package:"))
+async def admin_package_choice_handler(callback: CallbackQuery, state: FSMContext) -> None:
+    if not await ensure_admin_callback(callback):
+        return
+    raw_multiplier = (callback.data or "").split(":", maxsplit=1)[1]
+    try:
+        multiplier = int(raw_multiplier)
+    except ValueError:
+        await callback.answer("پکیج انتخاب‌شده معتبر نیست.", show_alert=True)
+        return
+    settings = get_runtime_config()
+    if multiplier not in settings.speed_packages:
+        await callback.answer("پکیج انتخاب‌شده در دسترس نیست.", show_alert=True)
+        return
+    await state.clear()
+    await state.update_data(
+        setting_name=f"speed_{multiplier}",
+        setting_key=speed_package_setting_key(multiplier),
+        setting_title=f"⚡ قیمت سرعت {format_multiplier(multiplier)}",
+        setting_prompt="قیمت جدید را به TRON ارسال کنید.",
+        setting_kind="positive_decimal",
+        setting_action=f"speed_package_{multiplier}_changed",
+    )
+    await state.set_state(AdminRuntimeSettingState.waiting_value)
+    await callback.answer()
+    await edit_callback_message(
+        callback,
+        panel(
+            f"⚡ قیمت سرعت {format_multiplier(multiplier)}",
+            [f"مقدار فعلی: {format_tron(settings.speed_packages[multiplier])}", "قیمت جدید را به TRON ارسال کنید."],
+        ),
+        admin_settings_back_keyboard(),
+    )
+
+
+@router.message(AdminRuntimeSettingState.waiting_value)
+async def admin_runtime_setting_value_handler(message: Message, state: FSMContext) -> None:
+    if not await ensure_admin_message(message, state):
+        return
+    data = await state.get_data()
+    setting_name = data.get("setting_name")
+    setting_key = data.get("setting_key")
+    setting_title = data.get("setting_title")
+    setting_kind = data.get("setting_kind")
+    setting_action = data.get("setting_action")
+    if not all(isinstance(item, str) and item for item in (setting_name, setting_key, setting_title, setting_kind, setting_action)):
+        await state.clear()
+        await message.answer(panel("⚙️ تنظیمات", ["اطلاعات تنظیم ناقص است.", "دوباره از پنل شروع کنید."]))
+        return
+
+    raw_value = (message.text or "").strip()
+    stored_value: str
+    display_value: str
+    if setting_kind == "positive_decimal":
+        parsed = parse_positive_decimal(raw_value)
+        if parsed is None:
+            await message.answer("مقدار باید یک عدد مثبت باشد.", reply_markup=admin_settings_back_keyboard())
+            return
+        stored_value = str(parsed)
+        display_value = format_tron(parsed)
+    elif setting_kind == "nonnegative_decimal":
+        parsed = parse_nonnegative_decimal(raw_value)
+        if parsed is None:
+            await message.answer("مقدار باید صفر یا یک عدد مثبت باشد.", reply_markup=admin_settings_back_keyboard())
+            return
+        stored_value = str(parsed)
+        display_value = format_tron(parsed)
+    elif setting_kind == "positive_integer":
+        parsed = parse_positive_decimal(raw_value)
+        if parsed is None or parsed != parsed.to_integral_value():
+            await message.answer("فاصله باید یک عدد صحیح مثبت باشد.", reply_markup=admin_settings_back_keyboard())
+            return
+        stored_value = str(int(parsed))
+        display_value = f"{stored_value} ثانیه"
+    elif setting_kind == "percentage":
+        parsed = parse_nonnegative_decimal(raw_value)
+        if parsed is None or parsed > Decimal("100"):
+            await message.answer("درصد باید بین ۰ تا ۱۰۰ باشد.", reply_markup=admin_settings_back_keyboard())
+            return
+        stored_value = str(parsed / Decimal("100"))
+        display_value = f"{format_number(parsed)}٪"
+    elif setting_kind == "webapp_url":
+        stored_value = normalize_web_app_url(raw_value)
+        if not valid_web_app_url(stored_value):
+            await message.answer("آدرس وب‌اپ باید یک لینک عمومی HTTPS در ریشهٔ دامنه باشد.", reply_markup=admin_settings_back_keyboard())
+            return
+        display_value = stored_value
+    else:
+        await state.clear()
+        await message.answer(panel("⚙️ تنظیمات", ["نوع تنظیم معتبر نیست."]))
+        return
+
+    await state.update_data(setting_value=stored_value, setting_display=display_value)
+    await state.set_state(AdminRuntimeSettingState.waiting_confirmation)
+    await message.answer(
+        panel("⚠️ تأیید نهایی", [setting_title, f"مقدار جدید: {display_value}"]),
+        reply_markup=admin_setting_confirmation_keyboard(setting_name),
+    )
+
+
+@router.callback_query(AdminRuntimeSettingState.waiting_confirmation, F.data.startswith("admin_setting_confirm:"))
+async def admin_runtime_setting_confirmation_handler(
+    callback: CallbackQuery,
+    state: FSMContext,
+    bot: Bot,
+) -> None:
+    if not await ensure_admin_callback(callback):
+        return
+    callback_setting_name = (callback.data or "").split(":", maxsplit=1)[1]
+    data = await state.get_data()
+    setting_name = data.get("setting_name")
+    setting_key = data.get("setting_key")
+    setting_value = data.get("setting_value")
+    setting_display = data.get("setting_display")
+    setting_title = data.get("setting_title")
+    setting_action = data.get("setting_action")
+    if (
+        callback_setting_name != setting_name
+        or not all(
+            isinstance(item, str) and item
+            for item in (setting_name, setting_key, setting_value, setting_display, setting_title, setting_action)
+        )
+    ):
+        await state.clear()
+        await callback.answer("اطلاعات تنظیم ناقص است.", show_alert=True)
+        await edit_callback_message(callback, admin_settings_text(), admin_settings_keyboard())
+        return
+
+    db.set_admin_setting(
+        admin_id=sender_id(callback) or 0,
+        key=setting_key,
+        value=setting_value,
+        action=setting_action,
+        reason=f"value={setting_value}",
+    )
+    await state.clear()
+
+    warning = ""
+    if setting_name == "webapp":
+        try:
+            await apply_web_app_menu_button(bot, setting_value)
+        except TelegramAPIError:
+            warning = "دکمه منوی تلگرام به‌روز نشد؛ آدرس ذخیره شده است."
+            logger.warning("به‌روزرسانی دکمه وب‌اپ تلگرام ممکن نشد.", exc_info=True)
+
+    await callback.answer("تنظیم ذخیره شد.")
+    lines = [f"{setting_title}: {setting_display}", "وضعیت: ذخیره شد"]
+    if warning:
+        lines.append(warning)
+    await edit_callback_message(callback, panel("⚙️ تنظیمات ربات", lines), admin_settings_keyboard())
+
 @router.callback_query(F.data == "admin:stats")
 async def admin_stats_callback_handler(callback: CallbackQuery, state: FSMContext) -> None:
     if not await ensure_admin_callback(callback):
@@ -1695,6 +2013,8 @@ def validate_configuration() -> None:
     for multiplier, price in SPEED_PACKAGES.items():
         if int(multiplier) <= 0 or not Decimal(str(price)).is_finite() or Decimal(str(price)) <= Decimal("0"):
             raise RuntimeError("SPEED_PACKAGES دارای مقدار نامعتبر است.")
+    if not 1 <= WEB_APP_PORT <= 65535:
+        raise RuntimeError("WEB_APP_PORT باید بین ۱ تا ۶۵۵۳۵ باشد.")
     if not ADMIN_IDS:
         logger.warning("ADMIN_IDS خالی است؛ تا زمان تنظیم آن هیچ‌کس به پنل مدیریت دسترسی ندارد.")
 
@@ -1708,14 +2028,30 @@ async def main() -> None:
     bot = Bot(token=BOT_TOKEN)
     dispatcher = Dispatcher(storage=MemoryStorage())
     dispatcher.include_router(router)
+    web_runner = None
 
     global runtime_bot_username
     try:
+        web_runner = await start_web_app_server(
+            database=db,
+            settings=runtime_settings,
+            bot_token=BOT_TOKEN,
+            host=WEB_APP_HOST,
+            port=WEB_APP_PORT,
+        )
         me = await bot.get_me()
         runtime_bot_username = runtime_bot_username or me.username or ""
+        settings = get_runtime_config()
+        if settings.web_app_url:
+            try:
+                await apply_web_app_menu_button(bot, settings.web_app_url)
+            except TelegramAPIError:
+                logger.warning("تنظیم دکمه منوی وب‌اپ تلگرام ممکن نشد.", exc_info=True)
         logger.info("ربات با نام @%s اجرا شد.", runtime_bot_username or "بدون نام کاربری")
         await dispatcher.start_polling(bot, allowed_updates=dispatcher.resolve_used_update_types())
     finally:
+        if web_runner is not None:
+            await web_runner.cleanup()
         await bot.session.close()
 
 
