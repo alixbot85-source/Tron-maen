@@ -384,6 +384,20 @@ class Database:
             finally:
                 connection.close()
 
+    def count_referrals(self, user_id: int) -> int:
+        """تعداد ثبت‌نام‌های موفقی را که با لینک دعوت کاربر انجام شده‌اند برمی‌گرداند."""
+        with self._lock:
+            connection = self._connect()
+            try:
+                return int(
+                    connection.execute(
+                        "SELECT COUNT(*) FROM users WHERE referrer_id = ?",
+                        (user_id,),
+                    ).fetchone()[0]
+                )
+            finally:
+                connection.close()
+
     def claim_mining(
         self,
         user_id: int,
