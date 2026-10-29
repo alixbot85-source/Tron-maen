@@ -243,6 +243,28 @@
       line-height: 1.95;
     }
 
+    .model-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+      margin-top: 13px;
+    }
+
+    .model-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 5px 9px;
+      border: 1px solid rgba(77, 107, 254, 0.16);
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.64);
+      color: #50617f;
+      font-size: 0.72rem;
+      font-weight: 700;
+    }
+
+    .model-chip strong { color: var(--primary-dark); }
+
     .layout-grid {
       display: grid;
       grid-template-columns: minmax(0, 1.08fr) minmax(315px, 0.92fr);
@@ -805,6 +827,9 @@
         return `${new Intl.NumberFormat("fa-IR", { maximumFractionDigits: 0 }).format(value)}٪`;
       }
 
+      const ANALYSIS_WINDOW = 72;
+      const RECENCY_DECAY = 0.86;
+
       function countMoves(records) {
         const counts = Object.fromEntries(MOVE_KEYS.map((move) => [move, 0]));
         records.forEach((record) => { counts[record.opponentMove] += 1; });
@@ -818,92 +843,367 @@
         }, MOVE_KEYS[0]);
       }
 
-      function suggestionFromPrediction(predicted, confidence, reason, source) {
+      function emptyMoveScores() {
+        return Object.fromEntries(MOVE_KEYS.map((move) => [move, 0]));
+      }
+
+      function topScoredMove(scores) {
+        return MOVE_KEYS.reduce((top, move) => {
+          return scores[move] > scores[top] ? move : top;
+        }, MOVE_KEYS[0]);
+      }
+
+      function sameSequence(left, right) {
+        return left.length === right.length && left.every((value, index) => value === right[index]);
+      }
+
+      function makeDistributionExpert({ id, label, baseWeight, events, dataLength, minSamples = 2 }) {
+        if (events.length < minSamples) return null;
+
+        const scores = emptyMoveScores();
+        events.forEach((event) => {
+          const age = Math.max(0, dataLength - 1 - event.index);
+          scores[event.move] += Math.pow(RECENCY_DECAY, age);
+        });
+
+        const total = MOVE_KEYS.reduce((sum, move) => sum + scores[move], 0);
+        if (!total) return null;
+
+        const predicted = topScoredMove(scores);
+        const probability = scores[predicted] / total;
+        const evidenceFactor = Math.min(1.4, 0.6 + events.length / 4);
+
+        return {
+          id,
+          label,
+          predicted,
+          samples: events.length,
+          probability,
+          weight: baseWeight * (0.65 + probability) * evidenceFactor
+        };
+      }
+
+      function getSequenceExpert(history, order) {
+        if (history.length <= order) return null;
+
+        const context = history.slice(-order).map((record) => record.opponentMove);
+        const events = [];
+
+        for (let index = order; index < history.length; index += 1) {
+          const priorSequence = history
+            .slice(index - order, index)
+            .map((record) => record.opponentMove);
+
+          if (sameSequence(priorSequence, context)) {
+            events.push({ move: history[index].opponentMove, index });
+          }
+        }
+
+        return makeDistributionExpert({
+          id: `sequence-${order}`,
+          label: `الگوی دنباله‌ای ${faNumber(order)} حرکتی`,
+          baseWeight: order === 3 ? 2.25 : order === 2 ? 1.95 : 1.65,
+          events,
+          dataLength: history.length,
+          minSamples: 2
+        });
+      }
+
+      function getPriorityMarkovExpert(history) {
+        if (history.length < 3) return null;
+        const lastOpponentMove = history[history.length - 1].opponentMove;
+        const events = [];
+
+        for (let index = 0; index < history.length - 1; index += 1) {
+          if (history[index].opponentMove === lastOpponentMove) {
+            events.push({ move: history[index + 1].opponentMove, index: index + 1 });
+          }
+        }
+
+        const expert = makeDistributionExpert({
+          id: "priority-markov",
+          label: "مارکوف اولویت‌دار",
+          baseWeight: 2.75,
+          events,
+          dataLength: history.length,
+          minSamples: 2
+        });
+
+        return expert && expert.probability >= 0.5 ? expert : null;
+      }
+
+      function getPriorityFrequencyExpert(history) {
+        if (history.length < 3) return null;
+        const counts = countMoves(history);
+        const predicted = getTopMove(history);
+        const share = counts[predicted] / history.length;
+        if (counts[predicted] < 3 || share < 0.45) return null;
+
+        return {
+          id: "priority-frequency",
+          label: "فراوانی اولویت‌دار",
+          predicted,
+          samples: counts[predicted],
+          probability: share,
+          weight: 2.15 * (0.65 + share)
+        };
+      }
+
+      function getOutcomeExpert(history) {
+        if (history.length < 3) return null;
+        const lastResult = history[history.length - 1].result;
+        const events = [];
+
+        for (let index = 1; index < history.length; index += 1) {
+          if (history[index - 1].result === lastResult) {
+            events.push({ move: history[index].opponentMove, index });
+          }
+        }
+
+        return makeDistributionExpert({
+          id: "outcome",
+          label: "واکنش به نتیجهٔ قبلی",
+          baseWeight: 1.4,
+          events,
+          dataLength: history.length
+        });
+      }
+
+      function getOutcomeMoveExpert(history) {
+        if (history.length < 3) return null;
+        const last = history[history.length - 1];
+        const events = [];
+
+        for (let index = 1; index < history.length; index += 1) {
+          const prior = history[index - 1];
+          if (prior.result === last.result && prior.opponentMove === last.opponentMove) {
+            events.push({ move: history[index].opponentMove, index });
+          }
+        }
+
+        return makeDistributionExpert({
+          id: "outcome-move",
+          label: "ترکیب حرکت و نتیجه",
+          baseWeight: 1.85,
+          events,
+          dataLength: history.length
+        });
+      }
+
+      function getMyMoveExpert(history) {
+        if (history.length < 3) return null;
+        const lastMyMove = history[history.length - 1].myMove;
+        const events = [];
+
+        for (let index = 1; index < history.length; index += 1) {
+          if (history[index - 1].myMove === lastMyMove) {
+            events.push({ move: history[index].opponentMove, index });
+          }
+        }
+
+        return makeDistributionExpert({
+          id: "my-move",
+          label: "واکنش به حرکت قبلی شما",
+          baseWeight: 1.05,
+          events,
+          dataLength: history.length
+        });
+      }
+
+      function getRecentExpert(history) {
+        if (history.length < 3) return null;
+        const start = Math.max(0, history.length - 10);
+        const events = history.slice(start).map((record, offset) => ({
+          move: record.opponentMove,
+          index: start + offset
+        }));
+
+        return makeDistributionExpert({
+          id: "recent",
+          label: "روند دست‌های اخیر",
+          baseWeight: 1.15,
+          events,
+          dataLength: history.length,
+          minSamples: 3
+        });
+      }
+
+      function getFrequencyExpert(history) {
+        if (history.length < 3) return null;
+        const events = history.map((record, index) => ({
+          move: record.opponentMove,
+          index
+        }));
+
+        return makeDistributionExpert({
+          id: "frequency",
+          label: "فراوانی کلی",
+          baseWeight: 0.95,
+          events,
+          dataLength: history.length,
+          minSamples: 3
+        });
+      }
+
+      function getPsychologyExpert(history) {
+        const last = history[history.length - 1];
+        let predicted = last.opponentMove;
+        let label = "تکرار پس از مساوی";
+
+        if (last.result === "lost") {
+          label = "تکرار پس از برد حریف";
+        } else if (last.result === "won") {
+          predicted = MOVES[last.opponentMove].next;
+          label = "تغییر پس از باخت حریف";
+        }
+
+        return {
+          id: "psychology",
+          label,
+          predicted,
+          samples: 1,
+          probability: 1,
+          weight: 0.8
+        };
+      }
+
+      function getBaseExpertPredictions(history) {
+        if (!history.length) return [];
+        const compactHistory = history.slice(-ANALYSIS_WINDOW);
+        return [
+          getPriorityMarkovExpert(compactHistory),
+          getPriorityFrequencyExpert(compactHistory),
+          getSequenceExpert(compactHistory, 3),
+          getSequenceExpert(compactHistory, 2),
+          getSequenceExpert(compactHistory, 1),
+          getOutcomeMoveExpert(compactHistory),
+          getOutcomeExpert(compactHistory),
+          getMyMoveExpert(compactHistory),
+          getRecentExpert(compactHistory),
+          getFrequencyExpert(compactHistory),
+          getPsychologyExpert(compactHistory)
+        ].filter(Boolean);
+      }
+
+      function getExpertPerformance(history) {
+        const performance = {};
+        const start = Math.max(3, history.length - 32);
+
+        for (let index = start; index < history.length; index += 1) {
+          const past = history.slice(Math.max(0, index - ANALYSIS_WINDOW), index);
+          const actualMove = history[index].opponentMove;
+          getBaseExpertPredictions(past).forEach((expert) => {
+            if (!performance[expert.id]) {
+              performance[expert.id] = { correct: 0, total: 0 };
+            }
+            performance[expert.id].total += 1;
+            if (expert.predicted === actualMove) {
+              performance[expert.id].correct += 1;
+            }
+          });
+        }
+
+        return performance;
+      }
+
+      function suggestionFromPrediction(predicted, confidence, reason, source, model = null) {
         return {
           suggested: MOVES[predicted].beatenBy,
           predicted,
           confidence,
           reason,
-          source
+          source,
+          model
         };
       }
 
-      // موتور پیشنهاد: اول Markov، سپس فراوانی و در آخر رفتار پس از نتیجهٔ قبلی.
+      // موتور ترکیبی تطبیقی: دنباله‌ها، روند تازه، نتیجهٔ قبلی و دقت گذشتهٔ هر الگو را هم‌زمان وزن می‌دهد.
       function computeSuggestion(history) {
         if (history.length === 0) {
           return suggestionFromPrediction(
             "rock",
             "low",
             "برای شروع، سنگ را پیش‌بینی می‌کنیم؛ بسیاری از بازیکن‌ها با سنگ شروع می‌کنند.",
-            "شروع بازی"
+            "شروع بازی",
+            { expertCount: 0, voteShare: 0, agreement: 0, margin: 0, window: 0 }
           );
         }
 
-        const lastOpp = history[history.length - 1].opponentMove;
-        const transitions = [];
-        for (let index = 0; index < history.length - 1; index += 1) {
-          if (history[index].opponentMove === lastOpp) {
-            transitions.push(history[index + 1].opponentMove);
-          }
+        const compactHistory = history.slice(-ANALYSIS_WINDOW);
+        const experts = getBaseExpertPredictions(compactHistory);
+        const performance = getExpertPerformance(compactHistory);
+        const votes = emptyMoveScores();
+        const contributors = Object.fromEntries(MOVE_KEYS.map((move) => [move, []]));
+
+        experts.forEach((expert) => {
+          const score = performance[expert.id];
+          const adaptiveMultiplier = score && score.total >= 3
+            ? 0.6 + score.correct / score.total
+            : 1;
+          const effectiveWeight = expert.weight * adaptiveMultiplier;
+
+          votes[expert.predicted] += effectiveWeight;
+          contributors[expert.predicted].push({
+            ...expert,
+            effectiveWeight,
+            accuracy: score && score.total ? score.correct / score.total : null,
+            tested: score ? score.total : 0
+          });
+        });
+
+        const predicted = topScoredMove(votes);
+        const orderedScores = [...MOVE_KEYS]
+          .map((move) => ({ move, score: votes[move] }))
+          .sort((left, right) => right.score - left.score);
+        const totalWeight = orderedScores.reduce((sum, item) => sum + item.score, 0) || 1;
+        const voteShare = votes[predicted] / totalWeight;
+        const margin = (orderedScores[0].score - orderedScores[1].score) / totalWeight;
+        const agreeingExperts = contributors[predicted];
+        const agreement = experts.length ? agreeingExperts.length / experts.length : 0;
+        const evidence = agreeingExperts.reduce((sum, expert) => sum + expert.samples, 0);
+
+        let confidence = "low";
+        if (
+          compactHistory.length >= 6 &&
+          agreeingExperts.length >= 3 &&
+          voteShare >= 0.66 &&
+          margin >= 0.16
+        ) {
+          confidence = "high";
+        } else if (
+          compactHistory.length >= 3 &&
+          agreeingExperts.length >= 2 &&
+          voteShare >= 0.5
+        ) {
+          confidence = "medium";
         }
 
-        if (transitions.length >= 2) {
-          const transitionCounts = Object.fromEntries(MOVE_KEYS.map((move) => [move, 0]));
-          transitions.forEach((move) => { transitionCounts[move] += 1; });
-          const predicted = MOVE_KEYS.reduce((top, move) => {
-            return transitionCounts[move] > transitionCounts[top] ? move : top;
-          }, MOVE_KEYS[0]);
-          const probability = transitionCounts[predicted] / transitions.length;
-
-          if (probability >= 0.5) {
-            return suggestionFromPrediction(
-              predicted,
-              probability >= 0.7 ? "high" : "medium",
-              `پس از «${MOVES[lastOpp].name}»، حریف در ${faPercent(probability * 100)} از ${faNumber(transitions.length)} الگوی قبلی «${MOVES[predicted].name}» زده است.`,
-              "زنجیرهٔ مارکوف"
-            );
-          }
-        }
-
-        const counts = countMoves(history);
-        const predictedByFrequency = getTopMove(history);
-        const frequency = counts[predictedByFrequency] / history.length;
-        if (counts[predictedByFrequency] >= 3 && frequency >= 0.45) {
-          return suggestionFromPrediction(
-            predictedByFrequency,
-            "medium",
-            `«${MOVES[predictedByFrequency].name}» ${faNumber(counts[predictedByFrequency])} بار از ${faNumber(history.length)} دست (${faPercent(frequency * 100)}) تکرار شده است.`,
-            "تحلیل فراوانی"
-          );
-        }
-
-        const lastRecord = history[history.length - 1];
-        if (lastRecord.result === "lost") {
-          return suggestionFromPrediction(
-            lastOpp,
-            "low",
-            `حریف دست قبل را با «${MOVES[lastOpp].name}» برده است؛ احتمال می‌دهیم همان حرکت را تکرار کند.`,
-            "رفتار پس از برد حریف"
-          );
-        }
-
-        if (lastRecord.result === "won") {
-          const predicted = MOVES[lastOpp].next;
-          return suggestionFromPrediction(
-            predicted,
-            "low",
-            `حریف با «${MOVES[lastOpp].name}» باخته است؛ در چرخهٔ سنگ ← کاغذ ← قیچی، حرکت بعدی را پیش‌بینی می‌کنیم.`,
-            "رفتار پس از باخت حریف"
-          );
-        }
+        const strongestContributors = [...agreeingExperts]
+          .sort((left, right) => right.effectiveWeight - left.effectiveWeight)
+          .slice(0, 2);
+        const source = strongestContributors.map((expert) => expert.label).join(" و ") || "تحلیل پایه";
+        const adaptiveDetails = strongestContributors
+          .filter((expert) => expert.tested >= 3)
+          .map((expert) => `${expert.label} با دقت ${faPercent((expert.accuracy || 0) * 100)}`);
+        const reason = `مدل ترکیبی از ${faNumber(experts.length)} الگوی هم‌زمان استفاده کرد و «${MOVES[predicted].name}» را محتمل‌تر دانست. ${source ? `بیشترین وزن از ${source} است.` : ""}${adaptiveDetails.length ? ` وزن این الگو بر اساس عملکرد گذشته تنظیم شده است.` : ""}`;
 
         return suggestionFromPrediction(
-          lastOpp,
-          "low",
-          `دست قبل با «${MOVES[lastOpp].name}» مساوی شده است؛ در حالت مساوی احتمال تکرار همان حرکت را در نظر می‌گیریم.`,
-          "رفتار پس از مساوی"
+          predicted,
+          confidence,
+          reason,
+          source,
+          {
+            expertCount: experts.length,
+            voteShare,
+            agreement,
+            margin,
+            evidence,
+            window: compactHistory.length,
+            contributors: strongestContributors
+          }
         );
       }
+
 
       function getAutoOpponent() {
         if (!state.form.myMove) return "";
@@ -936,6 +1236,15 @@
         const suggested = MOVES[suggestion.suggested];
         const predicted = MOVES[suggestion.predicted];
         const confidence = CONFIDENCE_INFO[suggestion.confidence];
+        const model = suggestion.model || { expertCount: 0, voteShare: 0, agreement: 0, window: 0 };
+        const modelMeta = model.expertCount
+          ? `
+              <div class="model-meta" aria-label="جزئیات مدل تطبیقی">
+                <span class="model-chip">🧠 <strong>${faNumber(model.expertCount)}</strong> الگوی فعال</span>
+                <span class="model-chip">توافق مدل‌ها <strong>${faPercent(model.agreement * 100)}</strong></span>
+                <span class="model-chip">دادهٔ مؤثر <strong>${faNumber(model.window)}</strong> دست</span>
+              </div>`
+          : `<div class="model-meta"><span class="model-chip">🧠 مدل تطبیقی پس از ثبت دست‌ها فعال‌تر می‌شود</span></div>`;
 
         elements.suggestion.innerHTML = `
           <div class="suggestion-action" aria-label="حرکت پیشنهادی ${suggested.name}">
@@ -945,13 +1254,14 @@
             </div>
           </div>
           <div>
-            <p class="suggestion-label">پیشنهاد برای دست بعدی</p>
+            <p class="suggestion-label">پیشنهاد هوشمند برای دست بعدی</p>
             <div class="suggestion-title-row">
               <h2 id="suggestion-heading" class="suggestion-heading">${suggested.name} را بزن</h2>
               <span class="confidence-badge ${confidence.className}">${confidence.label}</span>
             </div>
             <p class="prediction-line">پیش‌بینی حرکت حریف: <strong>${predicted.emoji} ${predicted.name}</strong></p>
             <p class="suggestion-reason">${suggestion.reason}</p>
+            ${modelMeta}
           </div>`;
       }
 
@@ -1010,6 +1320,18 @@
       function buildInsights() {
         if (state.history.length < 3) return [];
         const insights = [];
+        const model = state.currentSuggestion && state.currentSuggestion.model;
+        const recentRecords = state.history.slice(-10);
+        const recentCorrect = recentRecords.filter((record) => record.suggestionCorrect).length;
+
+        if (model && model.expertCount >= 2) {
+          insights.push(`مدل تطبیقی اکنون ${faNumber(model.expertCount)} الگو را هم‌زمان وزن می‌دهد؛ توافق مدل‌ها روی پیشنهاد فعلی ${faPercent(model.agreement * 100)} است.`);
+        }
+
+        if (recentRecords.length >= 3) {
+          insights.push(`دقت ${faNumber(recentRecords.length)} پیشنهاد اخیر ${faPercent((recentCorrect / recentRecords.length) * 100)} بوده است؛ مدل از این عملکرد برای وزن‌دهی الگوها استفاده می‌کند.`);
+        }
+
         const counts = countMoves(state.history);
         const topMove = getTopMove(state.history);
         const topRate = counts[topMove] / state.history.length;
