@@ -265,6 +265,39 @@
 
     .model-chip strong { color: var(--primary-dark); }
 
+    .counter-proof {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      margin: 2px 0 10px;
+      padding: 7px 10px;
+      border-radius: 10px;
+      background: rgba(22, 163, 74, 0.1);
+      color: #16743d;
+      font-size: 0.79rem;
+      font-weight: 800;
+    }
+
+    .use-suggestion-button {
+      min-height: 38px;
+      margin-top: 13px;
+      padding: 8px 12px;
+      border: 1px solid #bfc9ff;
+      border-radius: 10px;
+      background: #fff;
+      color: var(--primary-dark);
+      font-size: 0.8rem;
+      font-weight: 800;
+      transition: 160ms ease;
+    }
+
+    .use-suggestion-button:hover {
+      border-color: var(--primary);
+      background: var(--primary);
+      color: #fff;
+      transform: translateY(-1px);
+    }
+
     .layout-grid {
       display: grid;
       grid-template-columns: minmax(0, 1.08fr) minmax(315px, 0.92fr);
@@ -1274,6 +1307,56 @@
         return rawEntropy / Math.log(MOVE_KEYS.length);
       }
 
+      function getPredictionCalibration(history, rawPrediction) {
+        const records = history
+          .slice(-18)
+          .filter((record) => record.suggestion && MOVES[record.suggestion.predicted]);
+        const emptyCalibration = {
+          active: false,
+          predicted: rawPrediction,
+          direction: "same",
+          share: 0,
+          samples: records.length
+        };
+        if (records.length < 5) return emptyCalibration;
+
+        const directionScores = { same: 0, next: 0, previous: 0 };
+        records.forEach((record, index) => {
+          const oldPrediction = record.suggestion.predicted;
+          const actual = record.opponentMove;
+          const direction = actual === oldPrediction
+            ? "same"
+            : actual === MOVES[oldPrediction].next
+              ? "next"
+              : "previous";
+          const age = records.length - 1 - index;
+          directionScores[direction] += Math.pow(0.88, age);
+        });
+
+        const total = Object.values(directionScores).reduce((sum, value) => sum + value, 0);
+        const direction = Object.keys(directionScores).reduce((top, item) => {
+          return directionScores[item] > directionScores[top] ? item : top;
+        }, "same");
+        const share = directionScores[direction] / total;
+        const directShare = directionScores.same / total;
+
+        if (direction === "same" || share < 0.55 || share - directShare < 0.15) {
+          return { ...emptyCalibration, share, directShare };
+        }
+
+        const predicted = direction === "next"
+          ? MOVES[rawPrediction].next
+          : MOVES[rawPrediction].beats;
+        return {
+          active: true,
+          predicted,
+          direction,
+          share,
+          directShare,
+          samples: records.length
+        };
+      }
+
       // موتور ترکیبی تطبیقی: زمینهٔ دو بازیکن، مارکوف چندمرحله‌ای، روند اخیر و دقت هر الگو را هم‌زمان کالیبره می‌کند.
       function computeSuggestion(history) {
         if (history.length === 0) {
@@ -1289,6 +1372,7 @@
               margin: 0,
               entropy: 1,
               window: 0,
+              calibration: { active: false, samples: 0 },
               distribution: { rock: 1 / 3, paper: 1 / 3, scissors: 1 / 3 }
             }
           );
@@ -1331,13 +1415,18 @@
         const distribution = Object.fromEntries(
           MOVE_KEYS.map((move) => [move, posterior[move] / totalWeight])
         );
-        const predicted = topScoredMove(distribution);
+        const rawPrediction = topScoredMove(distribution);
+        const calibration = getPredictionCalibration(history, rawPrediction);
+        const predicted = calibration.predicted;
         const orderedScores = [...MOVE_KEYS]
           .map((move) => ({ move, score: distribution[move] }))
           .sort((left, right) => right.score - left.score);
-        const voteShare = distribution[predicted];
+        const rawVoteShare = distribution[rawPrediction];
+        const voteShare = calibration.active
+          ? rawVoteShare * 0.4 + calibration.share * 0.6
+          : rawVoteShare;
         const margin = orderedScores[0].score - orderedScores[1].score;
-        const agreeingExperts = experts.filter((expert) => expert.predicted === predicted);
+        const agreeingExperts = experts.filter((expert) => expert.predicted === rawPrediction);
         const agreement = experts.length ? agreeingExperts.length / experts.length : 0;
         const evidence = agreeingExperts.reduce((sum, expert) => sum + expert.samples, 0);
         const entropy = normalizedEntropy(distribution);
@@ -1361,10 +1450,11 @@
           confidence = "medium";
         }
 
-        const strongestContributors = [...contributors[predicted]]
+        const strongestContributors = [...contributors[rawPrediction]]
           .sort((left, right) => right.contribution - left.contribution)
           .slice(0, 3);
-        const source = strongestContributors.map((expert) => expert.label).join("، ") || "تحلیل پایه";
+        const baseSource = strongestContributors.map((expert) => expert.label).join("، ") || "تحلیل پایه";
+        const source = calibration.active ? `${baseSource} + اصلاح جهت خودکار` : baseSource;
         const calibratedExperts = strongestContributors.filter((expert) => expert.tested >= 4);
         const uncertaintyText = entropy > 0.92
           ? " الگوی حریف پراکنده است؛ برای این دست اطمینان محافظه‌کارانه نگه داشته شد."
@@ -1372,7 +1462,10 @@
         const adaptationText = calibratedExperts.length
           ? " وزن الگوهای برتر با دقت واقعی آن‌ها در دست‌های اخیر تنظیم شده است."
           : "";
-        const reason = `موتور تطبیقی ${faNumber(experts.length)} الگو را با هم ترکیب کرد و احتمال «${MOVES[predicted].name}» را ${faPercent(voteShare * 100)} برآورد کرد. بیشترین سیگنال‌ها: ${source}.${adaptationText}${uncertaintyText}`;
+        const calibrationText = calibration.active
+          ? ` جهت مدل با بررسی ${faNumber(calibration.samples)} پیش‌بینی اخیر، یک گام ${calibration.direction === "next" ? "به جلو" : "به عقب"} اصلاح شد.`
+          : "";
+        const reason = `موتور تطبیقی ${faNumber(experts.length)} الگو را با هم ترکیب کرد و احتمال «${MOVES[predicted].name}» را ${faPercent(voteShare * 100)} برآورد کرد. بیشترین سیگنال‌ها: ${baseSource}.${adaptationText}${calibrationText}${uncertaintyText}`;
 
         return suggestionFromPrediction(
           predicted,
@@ -1387,6 +1480,8 @@
             entropy,
             evidence,
             window: compactHistory.length,
+            rawPrediction,
+            calibration,
             distribution,
             contributors: strongestContributors
           }
@@ -1425,7 +1520,10 @@
         const suggested = MOVES[suggestion.suggested];
         const predicted = MOVES[suggestion.predicted];
         const confidence = CONFIDENCE_INFO[suggestion.confidence];
-        const model = suggestion.model || { expertCount: 0, voteShare: 0, agreement: 0, window: 0 };
+        const model = suggestion.model || { expertCount: 0, voteShare: 0, agreement: 0, window: 0, calibration: { active: false } };
+        const calibrationChip = model.calibration && model.calibration.active
+          ? `<span class="model-chip">🧭 اصلاح جهت <strong>فعال</strong></span>`
+          : "";
         const modelMeta = model.expertCount
           ? `
               <div class="model-meta" aria-label="جزئیات مدل تطبیقی">
@@ -1433,6 +1531,7 @@
                 <span class="model-chip">احتمال برتر <strong>${faPercent(model.voteShare * 100)}</strong></span>
                 <span class="model-chip">توافق مدل‌ها <strong>${faPercent(model.agreement * 100)}</strong></span>
                 <span class="model-chip">دادهٔ مؤثر <strong>${faNumber(model.window)}</strong> دست</span>
+                ${calibrationChip}
               </div>`
           : `<div class="model-meta"><span class="model-chip">🧠 مدل تطبیقی پس از ثبت دست‌ها فعال‌تر می‌شود</span></div>`;
 
@@ -1450,8 +1549,10 @@
               <span class="confidence-badge ${confidence.className}">${confidence.label}</span>
             </div>
             <p class="prediction-line">پیش‌بینی حرکت حریف: <strong>${predicted.emoji} ${predicted.name}</strong></p>
+            <p class="counter-proof">✓ ${suggested.emoji} ${suggested.name}، ${predicted.emoji} ${predicted.name} را می‌برد.</p>
             <p class="suggestion-reason">${suggestion.reason}</p>
             ${modelMeta}
+            <button class="use-suggestion-button" type="button" data-use-suggestion="${suggestion.suggested}">استفاده از این حرکت در فرم</button>
           </div>`;
       }
 
@@ -1520,6 +1621,9 @@
             insights.push("حرکت‌های حریف پراکندگی زیادی دارند و به رفتار تصادفی نزدیک‌اند؛ مدل عمداً اطمینان پیشنهاد را پایین نگه می‌دارد.");
           } else {
             insights.push(`ثبات الگوی فعلی حریف ${faPercent((1 - model.entropy) * 100)} است؛ هرچه این مقدار بالاتر باشد، تحلیل قابل اتکاتر است.`);
+          }
+          if (model.calibration && model.calibration.active) {
+            insights.push(`اصلاح جهت خودکار فعال است: در ${faPercent(model.calibration.share * 100)} از ${faNumber(model.calibration.samples)} پیش‌بینی اخیر، حرکت واقعی حریف یک گام ${model.calibration.direction === "next" ? "جلوتر" : "عقب‌تر"} از پیش‌بینی خام بوده است.`);
           }
         }
 
@@ -1670,6 +1774,15 @@
         elements.formMessage.textContent = message;
       }
 
+      elements.suggestion.addEventListener("click", (event) => {
+        const button = event.target.closest("[data-use-suggestion]");
+        if (!button) return;
+        state.form.myMove = button.dataset.useSuggestion;
+        setFormMessage("");
+        renderForm();
+        showToast(`حرکت «${MOVES[state.form.myMove].name}» در فرم انتخاب شد؛ بعد از بازی نتیجه را ثبت کنید.`, "info");
+      });
+
       elements.myMoveSelector.addEventListener("click", (event) => {
         const button = event.target.closest("[data-own]");
         if (!button) return;
@@ -1707,6 +1820,11 @@
         const opponentMove = getResolvedOpponent();
         const previousSuggestion = state.currentSuggestion;
         const suggestionCorrect = MOVES[previousSuggestion.suggested].beats === opponentMove;
+        const suggestionOutcome = suggestionCorrect
+          ? "win"
+          : previousSuggestion.suggested === opponentMove
+            ? "draw"
+            : "loss";
         const record = {
           id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
           timestamp: Date.now(),
@@ -1714,7 +1832,8 @@
           opponentMove,
           result: state.form.result,
           suggestion: previousSuggestion,
-          suggestionCorrect
+          suggestionCorrect,
+          suggestionOutcome
         };
 
         state.history.push(record);
@@ -1725,8 +1844,10 @@
 
         if (suggestionCorrect) {
           showToast(`پیشنهاد قبلی درست بود؛ «${MOVES[previousSuggestion.suggested].name}» حرکت حریف را می‌برد.`, "success");
+        } else if (suggestionOutcome === "draw") {
+          showToast("پیشنهاد قبلی با حرکت حریف مساوی شد؛ مدل جهت دست بعدی را دوباره کالیبره کرد.", "info");
         } else {
-          showToast("پیشنهاد قبلی حریف را نمی‌برد؛ الگوی جدید برای دست بعدی محاسبه شد.", "error");
+          showToast("پیشنهاد قبلی مقابل حرکت حریف باخت؛ مدل الگو و جهت پیش‌بینی را دوباره کالیبره کرد.", "error");
         }
       });
 
