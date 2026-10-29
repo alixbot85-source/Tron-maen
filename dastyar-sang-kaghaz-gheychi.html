@@ -869,9 +869,12 @@
         const total = MOVE_KEYS.reduce((sum, move) => sum + scores[move], 0);
         if (!total) return null;
 
-        const predicted = topScoredMove(scores);
-        const probability = scores[predicted] / total;
-        const evidenceFactor = Math.min(1.4, 0.6 + events.length / 4);
+        const distribution = Object.fromEntries(
+          MOVE_KEYS.map((move) => [move, scores[move] / total])
+        );
+        const predicted = topScoredMove(distribution);
+        const probability = distribution[predicted];
+        const evidenceFactor = Math.min(1.45, 0.6 + events.length / 4);
 
         return {
           id,
@@ -879,8 +882,17 @@
           predicted,
           samples: events.length,
           probability,
+          distribution,
           weight: baseWeight * (0.65 + probability) * evidenceFactor
         };
+      }
+
+      function makeSoftExpert({ id, label, predicted, samples, probability, weight }) {
+        const remainder = (1 - probability) / (MOVE_KEYS.length - 1);
+        const distribution = Object.fromEntries(
+          MOVE_KEYS.map((move) => [move, move === predicted ? probability : remainder])
+        );
+        return { id, label, predicted, samples, probability, distribution, weight };
       }
 
       function getSequenceExpert(history, order) {
@@ -909,6 +921,28 @@
         });
       }
 
+      function getPairSequenceExpert(history, order) {
+        if (history.length <= order) return null;
+        const pair = (record) => `${record.myMove}:${record.opponentMove}`;
+        const context = history.slice(-order).map(pair);
+        const events = [];
+
+        for (let index = order; index < history.length; index += 1) {
+          if (sameSequence(history.slice(index - order, index).map(pair), context)) {
+            events.push({ move: history[index].opponentMove, index });
+          }
+        }
+
+        return makeDistributionExpert({
+          id: `pair-sequence-${order}`,
+          label: `الگوی مشترک ${faNumber(order)} دست`,
+          baseWeight: order === 2 ? 2.45 : 1.8,
+          events,
+          dataLength: history.length,
+          minSamples: 2
+        });
+      }
+
       function getPriorityMarkovExpert(history) {
         if (history.length < 3) return null;
         const lastOpponentMove = history[history.length - 1].opponentMove;
@@ -923,7 +957,7 @@
         const expert = makeDistributionExpert({
           id: "priority-markov",
           label: "مارکوف اولویت‌دار",
-          baseWeight: 2.75,
+          baseWeight: 2.8,
           events,
           dataLength: history.length,
           minSamples: 2
@@ -939,13 +973,17 @@
         const share = counts[predicted] / history.length;
         if (counts[predicted] < 3 || share < 0.45) return null;
 
+        const distribution = Object.fromEntries(
+          MOVE_KEYS.map((move) => [move, counts[move] / history.length])
+        );
         return {
           id: "priority-frequency",
           label: "فراوانی اولویت‌دار",
           predicted,
           samples: counts[predicted],
           probability: share,
-          weight: 2.15 * (0.65 + share)
+          distribution,
+          weight: 2.2 * (0.65 + share)
         };
       }
 
@@ -963,7 +1001,7 @@
         return makeDistributionExpert({
           id: "outcome",
           label: "واکنش به نتیجهٔ قبلی",
-          baseWeight: 1.4,
+          baseWeight: 1.45,
           events,
           dataLength: history.length
         });
@@ -984,7 +1022,32 @@
         return makeDistributionExpert({
           id: "outcome-move",
           label: "ترکیب حرکت و نتیجه",
-          baseWeight: 1.85,
+          baseWeight: 1.9,
+          events,
+          dataLength: history.length
+        });
+      }
+
+      function getFullStateExpert(history) {
+        if (history.length < 3) return null;
+        const last = history[history.length - 1];
+        const events = [];
+
+        for (let index = 1; index < history.length; index += 1) {
+          const prior = history[index - 1];
+          if (
+            prior.myMove === last.myMove &&
+            prior.opponentMove === last.opponentMove &&
+            prior.result === last.result
+          ) {
+            events.push({ move: history[index].opponentMove, index });
+          }
+        }
+
+        return makeDistributionExpert({
+          id: "full-state",
+          label: "وضعیت کامل دست قبل",
+          baseWeight: 2.55,
           events,
           dataLength: history.length
         });
@@ -1004,9 +1067,89 @@
         return makeDistributionExpert({
           id: "my-move",
           label: "واکنش به حرکت قبلی شما",
-          baseWeight: 1.05,
+          baseWeight: 1.1,
           events,
           dataLength: history.length
+        });
+      }
+
+      function getDirectionalExpert(history) {
+        if (history.length < 4) return null;
+        const directionScores = { repeat: 0, next: 0, previous: 0 };
+
+        for (let index = 1; index < history.length; index += 1) {
+          const from = history[index - 1].opponentMove;
+          const to = history[index].opponentMove;
+          const direction = to === from
+            ? "repeat"
+            : MOVES[from].next === to
+              ? "next"
+              : "previous";
+          const age = history.length - 1 - index;
+          directionScores[direction] += Math.pow(RECENCY_DECAY, Math.max(0, age));
+        }
+
+        const total = Object.values(directionScores).reduce((sum, value) => sum + value, 0);
+        if (!total) return null;
+        const topDirection = Object.keys(directionScores).reduce((top, direction) => {
+          return directionScores[direction] > directionScores[top] ? direction : top;
+        }, "repeat");
+        const probability = directionScores[topDirection] / total;
+        if (probability < 0.45) return null;
+
+        const lastOpponentMove = history[history.length - 1].opponentMove;
+        const targetFor = (direction) => {
+          if (direction === "repeat") return lastOpponentMove;
+          if (direction === "next") return MOVES[lastOpponentMove].next;
+          return MOVES[lastOpponentMove].beats;
+        };
+        const distribution = emptyMoveScores();
+        Object.entries(directionScores).forEach(([direction, score]) => {
+          distribution[targetFor(direction)] += score / total;
+        });
+        const predicted = topScoredMove(distribution);
+
+        return {
+          id: "directional",
+          label: "ریتم چرخه‌ای حریف",
+          predicted,
+          samples: history.length - 1,
+          probability: distribution[predicted],
+          distribution,
+          weight: 1.55 * (0.65 + distribution[predicted])
+        };
+      }
+
+      function getStreakExpert(history) {
+        if (history.length < 4) return null;
+        const lastMove = history[history.length - 1].opponentMove;
+        let currentRun = 1;
+        for (let index = history.length - 2; index >= 0; index -= 1) {
+          if (history[index].opponentMove !== lastMove) break;
+          currentRun += 1;
+        }
+        if (currentRun < 2) return null;
+
+        const events = [];
+        for (let targetIndex = 1; targetIndex < history.length; targetIndex += 1) {
+          const repeatedMove = history[targetIndex - 1].opponentMove;
+          let runLength = 1;
+          for (let cursor = targetIndex - 2; cursor >= 0; cursor -= 1) {
+            if (history[cursor].opponentMove !== repeatedMove) break;
+            runLength += 1;
+          }
+          if (repeatedMove === lastMove && runLength >= Math.min(currentRun, 3)) {
+            events.push({ move: history[targetIndex].opponentMove, index: targetIndex });
+          }
+        }
+
+        return makeDistributionExpert({
+          id: "streak",
+          label: "شکستن یا ادامهٔ زنجیره",
+          baseWeight: 1.65,
+          events,
+          dataLength: history.length,
+          minSamples: 2
         });
       }
 
@@ -1021,7 +1164,7 @@
         return makeDistributionExpert({
           id: "recent",
           label: "روند دست‌های اخیر",
-          baseWeight: 1.15,
+          baseWeight: 1.2,
           events,
           dataLength: history.length,
           minSamples: 3
@@ -1037,7 +1180,7 @@
 
         return makeDistributionExpert({
           id: "frequency",
-          label: "فراوانی کلی",
+          label: "فراوانی وزن‌دار",
           baseWeight: 0.95,
           events,
           dataLength: history.length,
@@ -1057,14 +1200,14 @@
           label = "تغییر پس از باخت حریف";
         }
 
-        return {
+        return makeSoftExpert({
           id: "psychology",
           label,
           predicted,
           samples: 1,
-          probability: 1,
+          probability: 0.54,
           weight: 0.8
-        };
+        });
       }
 
       function getBaseExpertPredictions(history) {
@@ -1073,17 +1216,23 @@
         return [
           getPriorityMarkovExpert(compactHistory),
           getPriorityFrequencyExpert(compactHistory),
+          getPairSequenceExpert(compactHistory, 2),
+          getPairSequenceExpert(compactHistory, 1),
+          getFullStateExpert(compactHistory),
           getSequenceExpert(compactHistory, 3),
           getSequenceExpert(compactHistory, 2),
           getSequenceExpert(compactHistory, 1),
           getOutcomeMoveExpert(compactHistory),
           getOutcomeExpert(compactHistory),
           getMyMoveExpert(compactHistory),
+          getDirectionalExpert(compactHistory),
+          getStreakExpert(compactHistory),
           getRecentExpert(compactHistory),
           getFrequencyExpert(compactHistory),
           getPsychologyExpert(compactHistory)
         ].filter(Boolean);
       }
+
 
       function getExpertPerformance(history) {
         const performance = {};
@@ -1117,7 +1266,15 @@
         };
       }
 
-      // موتور ترکیبی تطبیقی: دنباله‌ها، روند تازه، نتیجهٔ قبلی و دقت گذشتهٔ هر الگو را هم‌زمان وزن می‌دهد.
+      function normalizedEntropy(distribution) {
+        const rawEntropy = -MOVE_KEYS.reduce((sum, move) => {
+          const probability = distribution[move];
+          return probability > 0 ? sum + probability * Math.log(probability) : sum;
+        }, 0);
+        return rawEntropy / Math.log(MOVE_KEYS.length);
+      }
+
+      // موتور ترکیبی تطبیقی: زمینهٔ دو بازیکن، مارکوف چندمرحله‌ای، روند اخیر و دقت هر الگو را هم‌زمان کالیبره می‌کند.
       function computeSuggestion(history) {
         if (history.length === 0) {
           return suggestionFromPrediction(
@@ -1125,67 +1282,97 @@
             "low",
             "برای شروع، سنگ را پیش‌بینی می‌کنیم؛ بسیاری از بازیکن‌ها با سنگ شروع می‌کنند.",
             "شروع بازی",
-            { expertCount: 0, voteShare: 0, agreement: 0, margin: 0, window: 0 }
+            {
+              expertCount: 0,
+              voteShare: 0,
+              agreement: 0,
+              margin: 0,
+              entropy: 1,
+              window: 0,
+              distribution: { rock: 1 / 3, paper: 1 / 3, scissors: 1 / 3 }
+            }
           );
         }
 
         const compactHistory = history.slice(-ANALYSIS_WINDOW);
         const experts = getBaseExpertPredictions(compactHistory);
         const performance = getExpertPerformance(compactHistory);
-        const votes = emptyMoveScores();
+        const posterior = emptyMoveScores();
         const contributors = Object.fromEntries(MOVE_KEYS.map((move) => [move, []]));
 
         experts.forEach((expert) => {
           const score = performance[expert.id];
-          const adaptiveMultiplier = score && score.total >= 3
-            ? 0.6 + score.correct / score.total
+          const accuracy = score && score.total ? score.correct / score.total : null;
+          const adaptiveMultiplier = score && score.total >= 4
+            ? Math.max(0.35, Math.min(1.7, 0.35 + 1.35 * accuracy))
             : 1;
           const effectiveWeight = expert.weight * adaptiveMultiplier;
-
-          votes[expert.predicted] += effectiveWeight;
-          contributors[expert.predicted].push({
+          const distribution = expert.distribution || makeSoftExpert({
             ...expert,
-            effectiveWeight,
-            accuracy: score && score.total ? score.correct / score.total : null,
-            tested: score ? score.total : 0
+            probability: expert.probability || 0.5
+          }).distribution;
+
+          MOVE_KEYS.forEach((move) => {
+            const contribution = effectiveWeight * distribution[move];
+            posterior[move] += contribution;
+            if (contribution > 0) {
+              contributors[move].push({
+                ...expert,
+                contribution,
+                effectiveWeight,
+                accuracy,
+                tested: score ? score.total : 0
+              });
+            }
           });
         });
 
-        const predicted = topScoredMove(votes);
+        const totalWeight = MOVE_KEYS.reduce((sum, move) => sum + posterior[move], 0) || 1;
+        const distribution = Object.fromEntries(
+          MOVE_KEYS.map((move) => [move, posterior[move] / totalWeight])
+        );
+        const predicted = topScoredMove(distribution);
         const orderedScores = [...MOVE_KEYS]
-          .map((move) => ({ move, score: votes[move] }))
+          .map((move) => ({ move, score: distribution[move] }))
           .sort((left, right) => right.score - left.score);
-        const totalWeight = orderedScores.reduce((sum, item) => sum + item.score, 0) || 1;
-        const voteShare = votes[predicted] / totalWeight;
-        const margin = (orderedScores[0].score - orderedScores[1].score) / totalWeight;
-        const agreeingExperts = contributors[predicted];
+        const voteShare = distribution[predicted];
+        const margin = orderedScores[0].score - orderedScores[1].score;
+        const agreeingExperts = experts.filter((expert) => expert.predicted === predicted);
         const agreement = experts.length ? agreeingExperts.length / experts.length : 0;
         const evidence = agreeingExperts.reduce((sum, expert) => sum + expert.samples, 0);
+        const entropy = normalizedEntropy(distribution);
 
         let confidence = "low";
         if (
-          compactHistory.length >= 6 &&
-          agreeingExperts.length >= 3 &&
-          voteShare >= 0.66 &&
-          margin >= 0.16
+          compactHistory.length >= 9 &&
+          agreeingExperts.length >= 4 &&
+          voteShare >= 0.52 &&
+          margin >= 0.12 &&
+          entropy <= 0.9
         ) {
           confidence = "high";
         } else if (
-          compactHistory.length >= 3 &&
+          compactHistory.length >= 4 &&
           agreeingExperts.length >= 2 &&
-          voteShare >= 0.5
+          voteShare >= 0.4 &&
+          margin >= 0.05 &&
+          entropy <= 0.97
         ) {
           confidence = "medium";
         }
 
-        const strongestContributors = [...agreeingExperts]
-          .sort((left, right) => right.effectiveWeight - left.effectiveWeight)
-          .slice(0, 2);
-        const source = strongestContributors.map((expert) => expert.label).join(" و ") || "تحلیل پایه";
-        const adaptiveDetails = strongestContributors
-          .filter((expert) => expert.tested >= 3)
-          .map((expert) => `${expert.label} با دقت ${faPercent((expert.accuracy || 0) * 100)}`);
-        const reason = `مدل ترکیبی از ${faNumber(experts.length)} الگوی هم‌زمان استفاده کرد و «${MOVES[predicted].name}» را محتمل‌تر دانست. ${source ? `بیشترین وزن از ${source} است.` : ""}${adaptiveDetails.length ? ` وزن این الگو بر اساس عملکرد گذشته تنظیم شده است.` : ""}`;
+        const strongestContributors = [...contributors[predicted]]
+          .sort((left, right) => right.contribution - left.contribution)
+          .slice(0, 3);
+        const source = strongestContributors.map((expert) => expert.label).join("، ") || "تحلیل پایه";
+        const calibratedExperts = strongestContributors.filter((expert) => expert.tested >= 4);
+        const uncertaintyText = entropy > 0.92
+          ? " الگوی حریف پراکنده است؛ برای این دست اطمینان محافظه‌کارانه نگه داشته شد."
+          : "";
+        const adaptationText = calibratedExperts.length
+          ? " وزن الگوهای برتر با دقت واقعی آن‌ها در دست‌های اخیر تنظیم شده است."
+          : "";
+        const reason = `موتور تطبیقی ${faNumber(experts.length)} الگو را با هم ترکیب کرد و احتمال «${MOVES[predicted].name}» را ${faPercent(voteShare * 100)} برآورد کرد. بیشترین سیگنال‌ها: ${source}.${adaptationText}${uncertaintyText}`;
 
         return suggestionFromPrediction(
           predicted,
@@ -1197,8 +1384,10 @@
             voteShare,
             agreement,
             margin,
+            entropy,
             evidence,
             window: compactHistory.length,
+            distribution,
             contributors: strongestContributors
           }
         );
@@ -1241,6 +1430,7 @@
           ? `
               <div class="model-meta" aria-label="جزئیات مدل تطبیقی">
                 <span class="model-chip">🧠 <strong>${faNumber(model.expertCount)}</strong> الگوی فعال</span>
+                <span class="model-chip">احتمال برتر <strong>${faPercent(model.voteShare * 100)}</strong></span>
                 <span class="model-chip">توافق مدل‌ها <strong>${faPercent(model.agreement * 100)}</strong></span>
                 <span class="model-chip">دادهٔ مؤثر <strong>${faNumber(model.window)}</strong> دست</span>
               </div>`
@@ -1325,7 +1515,12 @@
         const recentCorrect = recentRecords.filter((record) => record.suggestionCorrect).length;
 
         if (model && model.expertCount >= 2) {
-          insights.push(`مدل تطبیقی اکنون ${faNumber(model.expertCount)} الگو را هم‌زمان وزن می‌دهد؛ توافق مدل‌ها روی پیشنهاد فعلی ${faPercent(model.agreement * 100)} است.`);
+          insights.push(`مدل تطبیقی اکنون ${faNumber(model.expertCount)} الگو را هم‌زمان وزن می‌دهد؛ احتمال برتر ${faPercent(model.voteShare * 100)} و توافق مدل‌ها ${faPercent(model.agreement * 100)} است.`);
+          if (model.entropy > 0.92) {
+            insights.push("حرکت‌های حریف پراکندگی زیادی دارند و به رفتار تصادفی نزدیک‌اند؛ مدل عمداً اطمینان پیشنهاد را پایین نگه می‌دارد.");
+          } else {
+            insights.push(`ثبات الگوی فعلی حریف ${faPercent((1 - model.entropy) * 100)} است؛ هرچه این مقدار بالاتر باشد، تحلیل قابل اتکاتر است.`);
+          }
         }
 
         if (recentRecords.length >= 3) {
@@ -1335,9 +1530,19 @@
         const counts = countMoves(state.history);
         const topMove = getTopMove(state.history);
         const topRate = counts[topMove] / state.history.length;
+        const ownCounts = Object.fromEntries(MOVE_KEYS.map((move) => [move, 0]));
+        state.history.forEach((record) => { ownCounts[record.myMove] += 1; });
+        const ownTopMove = MOVE_KEYS.reduce((top, move) => {
+          return ownCounts[move] > ownCounts[top] ? move : top;
+        }, MOVE_KEYS[0]);
+        const ownTopRate = ownCounts[ownTopMove] / state.history.length;
 
         if (topRate >= 0.4) {
           insights.push(`پرتکرارترین حرکت حریف «${MOVES[topMove].emoji} ${MOVES[topMove].name}» است؛ ${faPercent(topRate * 100)} از همهٔ دست‌ها.`);
+        }
+
+        if (state.history.length >= 5 && ownTopRate >= 0.5) {
+          insights.push(`شما «${MOVES[ownTopMove].emoji} ${MOVES[ownTopMove].name}» را در ${faPercent(ownTopRate * 100)} دست‌ها زده‌اید؛ حریف انسانی ممکن است این عادت را یاد بگیرد، پس پیشنهاد مدل را دقیق اجرا کنید.`);
         }
 
         const opponentWinTransitions = [];
