@@ -1,0 +1,1222 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#4d6bfe" />
+  <title>دستیار حرفه‌ای سنگ کاغذ قیچی</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #f5f7fb;
+      --card: #ffffff;
+      --ink: #172033;
+      --muted: #68738a;
+      --line: #e7ebf3;
+      --primary: #4d6bfe;
+      --primary-dark: #3b56df;
+      --primary-soft: #eef1ff;
+      --win: #16a34a;
+      --win-soft: #ecfdf3;
+      --loss: #dc2626;
+      --loss-soft: #fef2f2;
+      --draw: #ca8a04;
+      --draw-soft: #fefce8;
+      --shadow: 0 10px 30px rgba(35, 52, 91, 0.08);
+      --radius: 16px;
+    }
+
+    * { box-sizing: border-box; }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      margin: 0;
+      min-width: 320px;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: "Vazirmatn", Tahoma, sans-serif;
+    }
+
+    button,
+    input { font: inherit; }
+
+    button { cursor: pointer; }
+
+    button:focus-visible {
+      outline: 3px solid rgba(77, 107, 254, 0.28);
+      outline-offset: 3px;
+    }
+
+    .app-shell {
+      width: min(1120px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 34px 0 56px;
+    }
+
+    .page-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 20px;
+      margin-bottom: 22px;
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      margin: 0 0 8px;
+      color: var(--primary);
+      font-size: 0.82rem;
+      font-weight: 800;
+    }
+
+    .eyebrow::before {
+      content: "";
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--primary);
+      box-shadow: 0 0 0 5px rgba(77, 107, 254, 0.12);
+    }
+
+    h1, h2, h3, p { margin-top: 0; }
+
+    h1 {
+      margin-bottom: 8px;
+      font-size: clamp(1.55rem, 4vw, 2.3rem);
+      line-height: 1.35;
+      letter-spacing: -0.04em;
+    }
+
+    .page-header p:last-child {
+      margin: 0;
+      color: var(--muted);
+      font-size: 0.96rem;
+      line-height: 1.8;
+    }
+
+    .clear-button {
+      flex: 0 0 auto;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      min-height: 42px;
+      padding: 9px 14px;
+      border: 1px solid #f3caca;
+      border-radius: 11px;
+      background: #fff;
+      color: var(--loss);
+      font-weight: 700;
+      transition: 160ms ease;
+    }
+
+    .clear-button:hover {
+      background: var(--loss-soft);
+      border-color: #e99595;
+    }
+
+    .card {
+      border-radius: var(--radius);
+      background: var(--card);
+      box-shadow: var(--shadow);
+    }
+
+    .suggestion-card {
+      position: sticky;
+      top: 12px;
+      z-index: 5;
+      overflow: hidden;
+      margin-bottom: 22px;
+      border: 2px solid var(--primary);
+      background:
+        radial-gradient(circle at 89% 8%, rgba(133, 155, 255, 0.27), transparent 29%),
+        linear-gradient(135deg, #f7f8ff 0%, #eef2ff 56%, #f8faff 100%);
+      box-shadow: 0 15px 35px rgba(77, 107, 254, 0.14);
+    }
+
+    .suggestion-card::after {
+      content: "";
+      position: absolute;
+      left: -60px;
+      bottom: -100px;
+      width: 210px;
+      height: 210px;
+      border-radius: 50%;
+      background: rgba(77, 107, 254, 0.06);
+      pointer-events: none;
+    }
+
+    .suggestion-content {
+      position: relative;
+      z-index: 1;
+      display: grid;
+      grid-template-columns: minmax(170px, 0.85fr) minmax(0, 1.6fr);
+      gap: 24px;
+      align-items: center;
+      min-height: 214px;
+      padding: 25px 28px;
+    }
+
+    .suggestion-action {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 14px;
+      padding: 14px;
+      text-align: center;
+    }
+
+    .suggested-emoji {
+      display: block;
+      font-family: Arial, sans-serif;
+      font-size: clamp(4.4rem, 9vw, 6.8rem);
+      line-height: 1;
+      filter: drop-shadow(0 8px 8px rgba(41, 65, 166, 0.18));
+    }
+
+    .suggested-name {
+      display: block;
+      margin-top: 9px;
+      color: var(--primary-dark);
+      font-size: clamp(1.45rem, 3vw, 2rem);
+      font-weight: 800;
+    }
+
+    .suggestion-label {
+      margin: 0 0 7px;
+      color: var(--primary-dark);
+      font-size: 0.85rem;
+      font-weight: 800;
+    }
+
+    .suggestion-title-row {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 9px;
+      margin-bottom: 9px;
+    }
+
+    .suggestion-heading {
+      margin: 0;
+      font-size: 1.34rem;
+      font-weight: 800;
+    }
+
+    .confidence-badge,
+    .result-badge,
+    .suggestion-check {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 999px;
+      font-size: 0.76rem;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+
+    .confidence-badge { padding: 5px 10px; }
+    .confidence-high { background: #dcfce7; color: #14713a; }
+    .confidence-medium { background: #fef3c7; color: #9a6700; }
+    .confidence-low { background: #e7eaf1; color: #526075; }
+
+    .prediction-line {
+      margin: 0 0 10px;
+      color: #34415d;
+      font-size: 1rem;
+      font-weight: 600;
+    }
+
+    .prediction-line strong { color: var(--ink); }
+
+    .suggestion-reason {
+      max-width: 660px;
+      margin: 0;
+      color: var(--muted);
+      font-size: 0.92rem;
+      line-height: 1.95;
+    }
+
+    .layout-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.08fr) minmax(315px, 0.92fr);
+      gap: 22px;
+      align-items: start;
+    }
+
+    .form-card,
+    .history-card,
+    .insights-card {
+      padding: 23px;
+    }
+
+    .section-heading {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 21px;
+    }
+
+    .section-heading h2 {
+      margin: 0;
+      font-size: 1.08rem;
+      font-weight: 800;
+    }
+
+    .section-help {
+      color: var(--muted);
+      font-size: 0.78rem;
+    }
+
+    .form-group + .form-group { margin-top: 22px; }
+
+    .field-label {
+      display: block;
+      margin-bottom: 10px;
+      color: #3d4a64;
+      font-size: 0.9rem;
+      font-weight: 700;
+    }
+
+    .move-selector,
+    .result-selector {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 9px;
+    }
+
+    .move-button,
+    .result-button {
+      min-height: 74px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: #fbfcff;
+      color: #47546d;
+      transition: 160ms ease;
+    }
+
+    .move-button {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 3px;
+      font-weight: 700;
+    }
+
+    .move-button .move-emoji {
+      font-family: Arial, sans-serif;
+      font-size: 1.73rem;
+      line-height: 1.1;
+    }
+
+    .move-button:hover,
+    .result-button:hover {
+      transform: translateY(-2px);
+      border-color: #bdc8ff;
+      background: #f3f5ff;
+    }
+
+    .move-button.is-active {
+      border-color: var(--primary);
+      background: var(--primary);
+      color: #fff;
+      box-shadow: 0 7px 15px rgba(77, 107, 254, 0.25);
+    }
+
+    .result-button {
+      padding: 9px 6px;
+      font-size: 0.88rem;
+      font-weight: 800;
+    }
+
+    .result-button.win.is-active { background: var(--win); border-color: var(--win); color: #fff; }
+    .result-button.loss.is-active { background: var(--loss); border-color: var(--loss); color: #fff; }
+    .result-button.draw.is-active { background: var(--draw); border-color: var(--draw); color: #fff; }
+
+    .auto-opponent {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      min-height: 50px;
+      padding: 10px 13px;
+      border: 1px dashed #bfc9ea;
+      border-radius: 12px;
+      background: #f7f9ff;
+      color: #52617d;
+      font-size: 0.9rem;
+    }
+
+    .auto-opponent strong {
+      color: var(--ink);
+      font-size: 0.96rem;
+    }
+
+    .hidden { display: none !important; }
+
+    .form-message {
+      min-height: 20px;
+      margin: 13px 0 0;
+      color: var(--loss);
+      font-size: 0.82rem;
+      font-weight: 600;
+    }
+
+    .submit-button {
+      width: 100%;
+      min-height: 52px;
+      margin-top: 12px;
+      border: 0;
+      border-radius: 13px;
+      background: var(--primary);
+      color: #fff;
+      font-weight: 800;
+      box-shadow: 0 9px 16px rgba(77, 107, 254, 0.25);
+      transition: 160ms ease;
+    }
+
+    .submit-button:hover { background: var(--primary-dark); transform: translateY(-1px); }
+    .submit-button:active { transform: translateY(1px); }
+
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      margin: 22px 0;
+    }
+
+    .stat-card {
+      min-height: 113px;
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: 15px;
+      background: var(--card);
+      box-shadow: 0 7px 20px rgba(35, 52, 91, 0.04);
+    }
+
+    .stat-label {
+      display: block;
+      margin-bottom: 10px;
+      color: var(--muted);
+      font-size: 0.78rem;
+      font-weight: 600;
+    }
+
+    .stat-value {
+      display: block;
+      color: var(--ink);
+      font-size: 1.58rem;
+      font-weight: 800;
+      line-height: 1;
+    }
+
+    .stat-detail {
+      display: block;
+      margin-top: 8px;
+      color: #7e899d;
+      font-size: 0.72rem;
+    }
+
+    .stat-card.win .stat-value { color: var(--win); }
+    .stat-card.loss .stat-value { color: var(--loss); }
+    .stat-card.accuracy .stat-value { color: var(--primary); }
+
+    .insights-card { margin-bottom: 22px; }
+
+    .insight-list {
+      display: grid;
+      gap: 10px;
+    }
+
+    .insight-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #fbfcff;
+      color: #43506a;
+      font-size: 0.89rem;
+      line-height: 1.8;
+    }
+
+    .insight-icon {
+      flex: 0 0 auto;
+      display: grid;
+      place-items: center;
+      width: 27px;
+      height: 27px;
+      border-radius: 9px;
+      background: var(--primary-soft);
+      color: var(--primary-dark);
+      font-size: 0.92rem;
+    }
+
+    .insight-empty {
+      margin: 0;
+      color: var(--muted);
+      font-size: 0.88rem;
+      line-height: 1.85;
+    }
+
+    .history-card { min-height: 355px; }
+
+    .history-list {
+      display: grid;
+      gap: 10px;
+    }
+
+    .history-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 12px;
+      align-items: center;
+      padding: 13px;
+      border: 1px solid var(--line);
+      border-radius: 13px;
+      background: #fcfdff;
+    }
+
+    .history-main { min-width: 0; }
+
+    .history-moves {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      direction: ltr;
+    }
+
+    .history-move {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      color: #293650;
+      font-size: 0.91rem;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .history-move .emoji {
+      font-family: Arial, sans-serif;
+      font-size: 1.25rem;
+    }
+
+    .history-move small {
+      direction: rtl;
+      color: var(--muted);
+      font-size: 0.68rem;
+      font-weight: 600;
+    }
+
+    .history-arrow {
+      color: #9da8bb;
+      font-size: 1.2rem;
+    }
+
+    .history-meta {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 7px;
+      margin-top: 9px;
+    }
+
+    .result-badge { padding: 4px 9px; }
+    .result-badge.win { background: var(--win-soft); color: var(--win); }
+    .result-badge.loss { background: var(--loss-soft); color: var(--loss); }
+    .result-badge.draw { background: var(--draw-soft); color: var(--draw); }
+
+    .history-time {
+      color: #98a2b3;
+      font-size: 0.72rem;
+    }
+
+    .suggestion-check {
+      gap: 4px;
+      align-self: start;
+      padding: 6px 8px;
+    }
+
+    .suggestion-check.correct { background: var(--win-soft); color: var(--win); }
+    .suggestion-check.incorrect { background: var(--loss-soft); color: var(--loss); }
+
+    .empty-state {
+      display: grid;
+      place-items: center;
+      min-height: 245px;
+      padding: 30px;
+      border: 1px dashed #ccd4e3;
+      border-radius: 14px;
+      color: var(--muted);
+      text-align: center;
+      line-height: 1.9;
+    }
+
+    .empty-state strong {
+      display: block;
+      margin-bottom: 5px;
+      color: #4b5872;
+    }
+
+    .toast {
+      position: fixed;
+      right: 50%;
+      bottom: 22px;
+      z-index: 20;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      width: min(430px, calc(100% - 32px));
+      padding: 13px 16px;
+      border: 1px solid transparent;
+      border-radius: 14px;
+      background: #fff;
+      box-shadow: 0 16px 40px rgba(27, 38, 65, 0.2);
+      color: #36425d;
+      opacity: 0;
+      pointer-events: none;
+      transform: translate(50%, 18px);
+      transition: opacity 190ms ease, transform 190ms ease;
+    }
+
+    .toast.show {
+      opacity: 1;
+      transform: translate(50%, 0);
+    }
+
+    .toast.success { border-color: #a7e4bc; background: #f2fdf6; }
+    .toast.error { border-color: #f2b5b5; background: #fff6f6; }
+    .toast.info { border-color: #c7d1ff; background: #f5f7ff; }
+
+    .toast-icon {
+      display: grid;
+      place-items: center;
+      width: 27px;
+      height: 27px;
+      border-radius: 50%;
+      color: #fff;
+      font-size: 0.8rem;
+      font-weight: 800;
+    }
+
+    .toast.success .toast-icon { background: var(--win); }
+    .toast.error .toast-icon { background: var(--loss); }
+    .toast.info .toast-icon { background: var(--primary); }
+
+    .toast-text { font-size: 0.88rem; font-weight: 600; line-height: 1.7; }
+
+    @media (max-width: 830px) {
+      .layout-grid { grid-template-columns: 1fr; }
+      .history-card { min-height: auto; }
+    }
+
+    @media (max-width: 650px) {
+      .app-shell { width: min(100% - 22px, 1120px); padding-top: 21px; }
+      .page-header { margin-bottom: 17px; }
+      .page-header p:last-child { font-size: 0.87rem; }
+      .clear-button { min-height: 38px; padding: 8px 10px; font-size: 0.77rem; }
+      .suggestion-card { top: 7px; margin-bottom: 16px; }
+      .suggestion-content { grid-template-columns: 92px minmax(0, 1fr); gap: 10px; min-height: 160px; padding: 17px 13px; }
+      .suggestion-action { padding: 5px; }
+      .suggested-emoji { font-size: 4rem; }
+      .suggested-name { margin-top: 4px; font-size: 1.1rem; }
+      .suggestion-heading { font-size: 1.08rem; }
+      .suggestion-reason { font-size: 0.78rem; line-height: 1.75; }
+      .prediction-line { margin-bottom: 7px; font-size: 0.88rem; }
+      .form-card, .history-card, .insights-card { padding: 17px; }
+      .move-button { min-height: 67px; font-size: 0.82rem; }
+      .move-button .move-emoji { font-size: 1.55rem; }
+      .result-button { font-size: 0.78rem; }
+      .stats-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; margin: 16px 0; }
+      .stat-card { min-height: 101px; padding: 13px; }
+      .stat-value { font-size: 1.42rem; }
+      .history-row { grid-template-columns: 1fr; gap: 8px; }
+      .suggestion-check { justify-self: start; }
+      .toast { bottom: 12px; }
+    }
+
+    @media (max-width: 390px) {
+      .page-header { gap: 11px; }
+      h1 { font-size: 1.32rem; }
+      .clear-button { font-size: 0; width: 40px; padding: 0; }
+      .clear-button::before { content: "🗑"; font-size: 1rem; }
+      .suggestion-content { grid-template-columns: 83px minmax(0, 1fr); }
+      .history-moves { gap: 5px; }
+      .history-move { font-size: 0.79rem; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; }
+    }
+  </style>
+</head>
+<body>
+  <main class="app-shell">
+    <header class="page-header">
+      <div>
+        <p class="eyebrow">تحلیل زندهٔ الگوی حریف</p>
+        <h1>دستیار حرفه‌ای سنگ کاغذ قیچی</h1>
+        <p>هر دست را ثبت کنید تا پیشنهاد بعدی بر اساس رفتار واقعی حریف دقیق‌تر شود.</p>
+      </div>
+      <button id="clear-all" class="clear-button" type="button" aria-label="پاک کردن همهٔ تاریخچه">پاک کردن همه</button>
+    </header>
+
+    <section class="suggestion-card" aria-labelledby="suggestion-heading">
+      <div id="suggestion-content" class="suggestion-content"></div>
+    </section>
+
+    <section class="layout-grid" aria-label="ثبت دست و تاریخچه">
+      <form id="hand-form" class="form-card card" novalidate>
+        <div class="section-heading">
+          <h2>ثبت دست جدید</h2>
+          <span class="section-help">نتیجه را از نگاه خودتان ثبت کنید</span>
+        </div>
+
+        <div class="form-group">
+          <span class="field-label">حرکت شما</span>
+          <div id="my-move-selector" class="move-selector" role="group" aria-label="انتخاب حرکت شما"></div>
+        </div>
+
+        <div class="form-group">
+          <span class="field-label">نتیجهٔ این دست</span>
+          <div id="result-selector" class="result-selector" role="group" aria-label="انتخاب نتیجه"></div>
+        </div>
+
+        <div id="opponent-section" class="form-group hidden">
+          <span class="field-label">حرکت حریف</span>
+          <div id="opponent-move-selector" class="move-selector" role="group" aria-label="انتخاب حرکت حریف"></div>
+        </div>
+
+        <div id="auto-opponent" class="auto-opponent hidden" aria-live="polite"></div>
+        <p id="form-message" class="form-message" aria-live="polite"></p>
+        <button class="submit-button" type="submit">ثبت دست و تحلیل پیشنهاد بعدی</button>
+      </form>
+
+      <aside class="history-card card" aria-labelledby="history-heading">
+        <div class="section-heading">
+          <h2 id="history-heading">تاریخچهٔ دست‌ها</h2>
+          <span id="history-count" class="section-help">۰ دست</span>
+        </div>
+        <div id="history-list" class="history-list"></div>
+      </aside>
+    </section>
+
+    <section id="stats-grid" class="stats-grid" aria-label="آمار بازی"></section>
+
+    <section id="insights-card" class="insights-card card hidden" aria-labelledby="insights-heading">
+      <div class="section-heading">
+        <h2 id="insights-heading">بینش‌های حریف</h2>
+        <span class="section-help">بر پایهٔ داده‌های ثبت‌شده</span>
+      </div>
+      <div id="insight-list" class="insight-list"></div>
+    </section>
+  </main>
+
+  <div id="toast" class="toast" role="status" aria-live="polite">
+    <span id="toast-icon" class="toast-icon">✓</span>
+    <span id="toast-text" class="toast-text"></span>
+  </div>
+
+  <script>
+    (() => {
+      "use strict";
+
+      const MOVES = {
+        rock: {
+          name: "سنگ",
+          emoji: "✊",
+          beats: "scissors",
+          beatenBy: "paper",
+          next: "paper"
+        },
+        paper: {
+          name: "کاغذ",
+          emoji: "✋",
+          beats: "rock",
+          beatenBy: "scissors",
+          next: "scissors"
+        },
+        scissors: {
+          name: "قیچی",
+          emoji: "✌️",
+          beats: "paper",
+          beatenBy: "rock",
+          next: "rock"
+        }
+      };
+
+      const MOVE_KEYS = Object.keys(MOVES);
+      const RESULT_INFO = {
+        won: { label: "بردم", className: "win" },
+        lost: { label: "باختم", className: "loss" },
+        draw: { label: "مساوی", className: "draw" }
+      };
+      const CONFIDENCE_INFO = {
+        high: { label: "اطمینان بالا", className: "confidence-high" },
+        medium: { label: "اطمینان متوسط", className: "confidence-medium" },
+        low: { label: "اطمینان کم", className: "confidence-low" }
+      };
+
+      const state = {
+        history: [],
+        form: {
+          myMove: "",
+          result: "",
+          opponentMove: ""
+        },
+        currentSuggestion: null
+      };
+
+      const elements = {
+        suggestion: document.getElementById("suggestion-content"),
+        form: document.getElementById("hand-form"),
+        myMoveSelector: document.getElementById("my-move-selector"),
+        resultSelector: document.getElementById("result-selector"),
+        opponentSection: document.getElementById("opponent-section"),
+        opponentMoveSelector: document.getElementById("opponent-move-selector"),
+        autoOpponent: document.getElementById("auto-opponent"),
+        formMessage: document.getElementById("form-message"),
+        stats: document.getElementById("stats-grid"),
+        insightsCard: document.getElementById("insights-card"),
+        insightList: document.getElementById("insight-list"),
+        historyList: document.getElementById("history-list"),
+        historyCount: document.getElementById("history-count"),
+        clearAll: document.getElementById("clear-all"),
+        toast: document.getElementById("toast"),
+        toastIcon: document.getElementById("toast-icon"),
+        toastText: document.getElementById("toast-text")
+      };
+
+      let toastTimer;
+
+      function faNumber(value) {
+        return new Intl.NumberFormat("fa-IR").format(value);
+      }
+
+      function faPercent(value) {
+        return `${new Intl.NumberFormat("fa-IR", { maximumFractionDigits: 0 }).format(value)}٪`;
+      }
+
+      function countMoves(records) {
+        const counts = Object.fromEntries(MOVE_KEYS.map((move) => [move, 0]));
+        records.forEach((record) => { counts[record.opponentMove] += 1; });
+        return counts;
+      }
+
+      function getTopMove(records) {
+        const counts = countMoves(records);
+        return MOVE_KEYS.reduce((top, move) => {
+          return counts[move] > counts[top] ? move : top;
+        }, MOVE_KEYS[0]);
+      }
+
+      function suggestionFromPrediction(predicted, confidence, reason, source) {
+        return {
+          suggested: MOVES[predicted].beatenBy,
+          predicted,
+          confidence,
+          reason,
+          source
+        };
+      }
+
+      // موتور پیشنهاد: اول Markov، سپس فراوانی و در آخر رفتار پس از نتیجهٔ قبلی.
+      function computeSuggestion(history) {
+        if (history.length === 0) {
+          return suggestionFromPrediction(
+            "rock",
+            "low",
+            "برای شروع، سنگ را پیش‌بینی می‌کنیم؛ بسیاری از بازیکن‌ها با سنگ شروع می‌کنند.",
+            "شروع بازی"
+          );
+        }
+
+        const lastOpp = history[history.length - 1].opponentMove;
+        const transitions = [];
+        for (let index = 0; index < history.length - 1; index += 1) {
+          if (history[index].opponentMove === lastOpp) {
+            transitions.push(history[index + 1].opponentMove);
+          }
+        }
+
+        if (transitions.length >= 2) {
+          const transitionCounts = Object.fromEntries(MOVE_KEYS.map((move) => [move, 0]));
+          transitions.forEach((move) => { transitionCounts[move] += 1; });
+          const predicted = MOVE_KEYS.reduce((top, move) => {
+            return transitionCounts[move] > transitionCounts[top] ? move : top;
+          }, MOVE_KEYS[0]);
+          const probability = transitionCounts[predicted] / transitions.length;
+
+          if (probability >= 0.5) {
+            return suggestionFromPrediction(
+              predicted,
+              probability >= 0.7 ? "high" : "medium",
+              `پس از «${MOVES[lastOpp].name}»، حریف در ${faPercent(probability * 100)} از ${faNumber(transitions.length)} الگوی قبلی «${MOVES[predicted].name}» زده است.`,
+              "زنجیرهٔ مارکوف"
+            );
+          }
+        }
+
+        const counts = countMoves(history);
+        const predictedByFrequency = getTopMove(history);
+        const frequency = counts[predictedByFrequency] / history.length;
+        if (counts[predictedByFrequency] >= 3 && frequency >= 0.45) {
+          return suggestionFromPrediction(
+            predictedByFrequency,
+            "medium",
+            `«${MOVES[predictedByFrequency].name}» ${faNumber(counts[predictedByFrequency])} بار از ${faNumber(history.length)} دست (${faPercent(frequency * 100)}) تکرار شده است.`,
+            "تحلیل فراوانی"
+          );
+        }
+
+        const lastRecord = history[history.length - 1];
+        if (lastRecord.result === "lost") {
+          return suggestionFromPrediction(
+            lastOpp,
+            "low",
+            `حریف دست قبل را با «${MOVES[lastOpp].name}» برده است؛ احتمال می‌دهیم همان حرکت را تکرار کند.`,
+            "رفتار پس از برد حریف"
+          );
+        }
+
+        if (lastRecord.result === "won") {
+          const predicted = MOVES[lastOpp].next;
+          return suggestionFromPrediction(
+            predicted,
+            "low",
+            `حریف با «${MOVES[lastOpp].name}» باخته است؛ در چرخهٔ سنگ ← کاغذ ← قیچی، حرکت بعدی را پیش‌بینی می‌کنیم.`,
+            "رفتار پس از باخت حریف"
+          );
+        }
+
+        return suggestionFromPrediction(
+          lastOpp,
+          "low",
+          `دست قبل با «${MOVES[lastOpp].name}» مساوی شده است؛ در حالت مساوی احتمال تکرار همان حرکت را در نظر می‌گیریم.`,
+          "رفتار پس از مساوی"
+        );
+      }
+
+      function getAutoOpponent() {
+        if (!state.form.myMove) return "";
+        if (state.form.result === "won") return MOVES[state.form.myMove].beats;
+        if (state.form.result === "draw") return state.form.myMove;
+        return "";
+      }
+
+      function getResolvedOpponent() {
+        return state.form.result === "lost" ? state.form.opponentMove : getAutoOpponent();
+      }
+
+      function moveButtonHTML(move, selected, dataAttribute, labelPrefix) {
+        const item = MOVES[move];
+        return `
+          <button
+            class="move-button ${selected === move ? "is-active" : ""}"
+            type="button"
+            data-${dataAttribute}="${move}"
+            aria-pressed="${selected === move}"
+            aria-label="${labelPrefix} ${item.name}"
+          >
+            <span class="move-emoji" aria-hidden="true">${item.emoji}</span>
+            <span>${item.name}</span>
+          </button>`;
+      }
+
+      function renderSuggestion() {
+        const suggestion = state.currentSuggestion;
+        const suggested = MOVES[suggestion.suggested];
+        const predicted = MOVES[suggestion.predicted];
+        const confidence = CONFIDENCE_INFO[suggestion.confidence];
+
+        elements.suggestion.innerHTML = `
+          <div class="suggestion-action" aria-label="حرکت پیشنهادی ${suggested.name}">
+            <div>
+              <span class="suggested-emoji" aria-hidden="true">${suggested.emoji}</span>
+              <span class="suggested-name">${suggested.name}</span>
+            </div>
+          </div>
+          <div>
+            <p class="suggestion-label">پیشنهاد برای دست بعدی</p>
+            <div class="suggestion-title-row">
+              <h2 id="suggestion-heading" class="suggestion-heading">${suggested.name} را بزن</h2>
+              <span class="confidence-badge ${confidence.className}">${confidence.label}</span>
+            </div>
+            <p class="prediction-line">پیش‌بینی حرکت حریف: <strong>${predicted.emoji} ${predicted.name}</strong></p>
+            <p class="suggestion-reason">${suggestion.reason}</p>
+          </div>`;
+      }
+
+      function renderForm() {
+        elements.myMoveSelector.innerHTML = MOVE_KEYS.map((move) => {
+          return moveButtonHTML(move, state.form.myMove, "own", "حرکت شما:");
+        }).join("");
+
+        elements.resultSelector.innerHTML = Object.entries(RESULT_INFO).map(([key, info]) => `
+          <button
+            class="result-button ${info.className} ${state.form.result === key ? "is-active" : ""}"
+            type="button"
+            data-result="${key}"
+            aria-pressed="${state.form.result === key}"
+          >${info.label}</button>`).join("");
+
+        const needsOpponentSelection = state.form.result === "lost";
+        elements.opponentSection.classList.toggle("hidden", !needsOpponentSelection);
+        elements.autoOpponent.classList.toggle("hidden", needsOpponentSelection || !state.form.result || !state.form.myMove);
+
+        if (needsOpponentSelection) {
+          elements.opponentMoveSelector.innerHTML = MOVE_KEYS.map((move) => {
+            return moveButtonHTML(move, state.form.opponentMove, "opponent", "حرکت حریف:");
+          }).join("");
+        }
+
+        if (!needsOpponentSelection && state.form.result && state.form.myMove) {
+          const opponent = MOVES[getAutoOpponent()];
+          const description = state.form.result === "won" ? "چون بردید، حرکتِ مغلوب حریف محاسبه شد:" : "چون مساوی شده‌اید، حرکت حریف همان حرکت شماست:";
+          elements.autoOpponent.innerHTML = `<span>ℹ️</span><span>${description} <strong>${opponent.emoji} ${opponent.name}</strong></span>`;
+        }
+      }
+
+      function buildStats() {
+        const wins = state.history.filter((record) => record.result === "won").length;
+        const losses = state.history.filter((record) => record.result === "lost").length;
+        const correct = state.history.filter((record) => record.suggestionCorrect).length;
+        const accuracy = state.history.length ? (correct / state.history.length) * 100 : 0;
+        return [
+          { label: "کل دست‌ها", value: faNumber(state.history.length), detail: "ثبت‌شده در این جلسه", className: "" },
+          { label: "بردهای شما", value: faNumber(wins), detail: "نتیجهٔ ثبت‌شده", className: "win" },
+          { label: "باخت‌های شما", value: faNumber(losses), detail: "نتیجهٔ ثبت‌شده", className: "loss" },
+          { label: "دقت پیشنهاد", value: state.history.length ? faPercent(accuracy) : "—", detail: state.history.length ? `${faNumber(correct)} پیشنهاد درست` : "هنوز داده‌ای نیست", className: "accuracy" }
+        ];
+      }
+
+      function renderStats() {
+        elements.stats.innerHTML = buildStats().map((stat) => `
+          <article class="stat-card ${stat.className}">
+            <span class="stat-label">${stat.label}</span>
+            <strong class="stat-value">${stat.value}</strong>
+            <span class="stat-detail">${stat.detail}</span>
+          </article>`).join("");
+      }
+
+      function buildInsights() {
+        if (state.history.length < 3) return [];
+        const insights = [];
+        const counts = countMoves(state.history);
+        const topMove = getTopMove(state.history);
+        const topRate = counts[topMove] / state.history.length;
+
+        if (topRate >= 0.4) {
+          insights.push(`پرتکرارترین حرکت حریف «${MOVES[topMove].emoji} ${MOVES[topMove].name}» است؛ ${faPercent(topRate * 100)} از همهٔ دست‌ها.`);
+        }
+
+        const opponentWinTransitions = [];
+        const opponentLossTransitions = [];
+        for (let index = 0; index < state.history.length - 1; index += 1) {
+          const current = state.history[index];
+          const next = state.history[index + 1];
+          if (current.result === "lost") {
+            opponentWinTransitions.push(next.opponentMove !== current.opponentMove);
+          }
+          if (current.result === "won") {
+            opponentLossTransitions.push(next.opponentMove === current.opponentMove);
+          }
+        }
+
+        if (opponentWinTransitions.length >= 2) {
+          const changed = opponentWinTransitions.filter(Boolean).length;
+          insights.push(`پس از برد حریف، در ${faPercent((changed / opponentWinTransitions.length) * 100)} موارد حرکتش را تغییر داده است.`);
+        }
+
+        let longestStreak = 1;
+        let currentStreak = 1;
+        for (let index = 1; index < state.history.length; index += 1) {
+          if (state.history[index].opponentMove === state.history[index - 1].opponentMove) {
+            currentStreak += 1;
+            longestStreak = Math.max(longestStreak, currentStreak);
+          } else {
+            currentStreak = 1;
+          }
+        }
+        if (longestStreak >= 2) {
+          insights.push(`طولانی‌ترین زنجیرهٔ تکرار متوالی حریف ${faNumber(longestStreak)} دست بوده است.`);
+        }
+
+        if (opponentLossTransitions.length >= 2) {
+          const repeated = opponentLossTransitions.filter(Boolean).length;
+          insights.push(`پس از باخت حریف، در ${faPercent((repeated / opponentLossTransitions.length) * 100)} موارد همان حرکت را تکرار کرده است.`);
+        }
+
+        return insights;
+      }
+
+      function renderInsights() {
+        if (state.history.length < 3) {
+          elements.insightsCard.classList.add("hidden");
+          return;
+        }
+
+        const insights = buildInsights();
+        elements.insightsCard.classList.remove("hidden");
+        elements.insightList.innerHTML = insights.length
+          ? insights.map((insight) => `<div class="insight-item"><span class="insight-icon">⌁</span><span>${insight}</span></div>`).join("")
+          : `<p class="insight-empty">دادهٔ اولیه جمع شده است؛ چند دست دیگر ثبت کنید تا الگوی قابل اتکاتری دیده شود.</p>`;
+      }
+
+      function formatTime(timestamp) {
+        return new Intl.DateTimeFormat("fa-IR", { hour: "2-digit", minute: "2-digit" }).format(new Date(timestamp));
+      }
+
+      function renderHistory() {
+        elements.historyCount.textContent = `${faNumber(state.history.length)} دست`;
+        if (!state.history.length) {
+          elements.historyList.innerHTML = `
+            <div class="empty-state">
+              <div><strong>تاریخچه هنوز خالی است</strong>اولین دست را ثبت کنید تا تحلیل حریف شروع شود.</div>
+            </div>`;
+          return;
+        }
+
+        elements.historyList.innerHTML = [...state.history].reverse().map((record) => {
+          const mine = MOVES[record.myMove];
+          const opponent = MOVES[record.opponentMove];
+          const result = RESULT_INFO[record.result];
+          const correctClass = record.suggestionCorrect ? "correct" : "incorrect";
+          const correctText = record.suggestionCorrect ? "✓ پیشنهاد درست" : "✗ پیشنهاد نادرست";
+          return `
+            <article class="history-row">
+              <div class="history-main">
+                <div class="history-moves" aria-label="حرکت من ${mine.name} و حرکت حریف ${opponent.name}">
+                  <span class="history-move"><span class="emoji">${mine.emoji}</span><span><small>من</small> ${mine.name}</span></span>
+                  <span class="history-arrow" aria-hidden="true">←</span>
+                  <span class="history-move"><span class="emoji">${opponent.emoji}</span><span><small>حریف</small> ${opponent.name}</span></span>
+                </div>
+                <div class="history-meta">
+                  <span class="result-badge ${result.className}">${result.label}</span>
+                  <span class="history-time">${formatTime(record.timestamp)}</span>
+                </div>
+              </div>
+              <span class="suggestion-check ${correctClass}">${correctText}</span>
+            </article>`;
+        }).join("");
+      }
+
+      function render() {
+        renderSuggestion();
+        renderForm();
+        renderStats();
+        renderInsights();
+        renderHistory();
+      }
+
+      function showToast(text, type) {
+        const icon = type === "success" ? "✓" : type === "error" ? "!" : "i";
+        elements.toast.className = `toast ${type}`;
+        elements.toastIcon.textContent = icon;
+        elements.toastText.textContent = text;
+        window.clearTimeout(toastTimer);
+        requestAnimationFrame(() => elements.toast.classList.add("show"));
+        toastTimer = window.setTimeout(() => {
+          elements.toast.classList.remove("show");
+        }, 3800);
+      }
+
+      function validateForm() {
+        if (!state.form.myMove) return "ابتدا حرکت خودتان را انتخاب کنید.";
+        if (!state.form.result) return "نتیجهٔ این دست را انتخاب کنید.";
+        if (state.form.result === "lost" && !state.form.opponentMove) return "چون باخته‌اید، حرکت حریف را هم انتخاب کنید.";
+        if (state.form.result === "lost" && MOVES[state.form.opponentMove].beats !== state.form.myMove) {
+          return `برای ثبت باخت، حریف باید حرکتی را زده باشد که «${MOVES[state.form.myMove].name}» شما را می‌برد.`;
+        }
+        return "";
+      }
+
+      function setFormMessage(message) {
+        elements.formMessage.textContent = message;
+      }
+
+      elements.myMoveSelector.addEventListener("click", (event) => {
+        const button = event.target.closest("[data-own]");
+        if (!button) return;
+        state.form.myMove = button.dataset.own;
+        setFormMessage("");
+        renderForm();
+      });
+
+      elements.resultSelector.addEventListener("click", (event) => {
+        const button = event.target.closest("[data-result]");
+        if (!button) return;
+        state.form.result = button.dataset.result;
+        state.form.opponentMove = "";
+        setFormMessage("");
+        renderForm();
+      });
+
+      elements.opponentMoveSelector.addEventListener("click", (event) => {
+        const button = event.target.closest("[data-opponent]");
+        if (!button) return;
+        state.form.opponentMove = button.dataset.opponent;
+        setFormMessage("");
+        renderForm();
+      });
+
+      elements.form.addEventListener("submit", (event) => {
+        event.preventDefault();
+        const error = validateForm();
+        if (error) {
+          setFormMessage(error);
+          showToast(error, "error");
+          return;
+        }
+
+        const opponentMove = getResolvedOpponent();
+        const previousSuggestion = state.currentSuggestion;
+        const suggestionCorrect = MOVES[previousSuggestion.suggested].beats === opponentMove;
+        const record = {
+          id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+          timestamp: Date.now(),
+          myMove: state.form.myMove,
+          opponentMove,
+          result: state.form.result,
+          suggestion: previousSuggestion,
+          suggestionCorrect
+        };
+
+        state.history.push(record);
+        state.currentSuggestion = computeSuggestion(state.history);
+        state.form = { myMove: "", result: "", opponentMove: "" };
+        setFormMessage("");
+        render();
+
+        if (suggestionCorrect) {
+          showToast(`پیشنهاد قبلی درست بود؛ «${MOVES[previousSuggestion.suggested].name}» حرکت حریف را می‌برد.`, "success");
+        } else {
+          showToast("پیشنهاد قبلی حریف را نمی‌برد؛ الگوی جدید برای دست بعدی محاسبه شد.", "error");
+        }
+      });
+
+      elements.clearAll.addEventListener("click", () => {
+        const confirmed = window.confirm("همهٔ دست‌ها، آمار و تحلیل‌های این جلسه پاک شوند؟");
+        if (!confirmed) return;
+        state.history = [];
+        state.form = { myMove: "", result: "", opponentMove: "" };
+        state.currentSuggestion = computeSuggestion(state.history);
+        setFormMessage("");
+        render();
+        showToast("تاریخچه پاک شد و تحلیل از نو شروع شد.", "info");
+      });
+
+      state.currentSuggestion = computeSuggestion(state.history);
+      render();
+    })();
+  </script>
+</body>
+</html>
